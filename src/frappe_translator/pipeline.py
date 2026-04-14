@@ -261,7 +261,9 @@ async def _process_app(
         progress=progress,
         app_name=app.name,
         target_languages=target_languages,
+        style_config=style_config,
         checkpoint_interval=config.checkpoint_interval,
+        batch_size=config.batch_size,
     )
 
     # Final flush

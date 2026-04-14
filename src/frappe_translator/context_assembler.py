@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 from frappe_translator.models import AssembledContext, TermGlossary, TranslationEntry
 from frappe_translator.prompts import build_translation_prompt
-from frappe_translator.source_context import extract_snippets, format_snippets
+from frappe_translator.source_context import extract_snippets, format_snippets, select_diverse_snippets
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ def assemble_contexts(
     for entry in entries:
         try:
             snippets = extract_snippets(entry, app_path, file_cache=file_cache)
+            snippets = select_diverse_snippets(snippets, max_snippets=3)
         except Exception:
             logger.warning("Failed to extract snippets for %r, using empty list", entry.msgid, exc_info=True)
             snippets = []

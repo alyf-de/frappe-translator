@@ -108,3 +108,99 @@ def build_translation_prompt(
     )
 
     return "\n".join(lines)
+
+
+def build_batch_translation_prompt(
+    entries: list[dict[str, Any]],
+    shared_glossary: dict[str, dict[str, str]],
+    target_languages: list[str],
+    style_config: dict[str, Any],
+) -> str:
+    """Build a prompt for translating multiple strings at once.
+
+    Args:
+        entries: List of dicts with keys: index, msgid, msgctxt, comments, snippets_text,
+                 glossary_terms (entry-specific subset), target_languages (if per-entry).
+        shared_glossary: Union of all glossary terms across the batch.
+        target_languages: Default target languages for the batch.
+        style_config: Style instructions per language.
+    """
+    lines: list[str] = [
+        "You are a professional software translator for a business application (Frappe/ERPNext).",
+        "",
+        "Translate each of the following UI strings into the target languages listed.",
+        "",
+        "## Rules",
+        "1. Preserve ALL placeholders exactly: {0}, %s, {variable_name}, ${...}",
+        "2. Preserve HTML tags and entities exactly",
+        "3. Preserve Markdown formatting",
+        "4. Do not translate technical identifiers (DocType names used as identifiers)",
+        "5. Match the tone and register of the original (error messages stay direct, help text stays friendly)",
+    ]
+
+    if shared_glossary:
+        lines.append("")
+        lines.append("## Terminology Glossary (use these translations for consistency)")
+        for term, translations in shared_glossary.items():
+            lines.append(f'- "{term}": {json.dumps(translations, ensure_ascii=False)}')
+
+    if style_config:
+        lines.append("")
+        lines.append("## Style Instructions")
+        for language, style in style_config.items():
+            if isinstance(style, dict):
+                formality = style.get("formality", "")
+                address = style.get("address", "")
+                notes = style.get("notes", "")
+                direction = style.get("direction", "")
+                parts = []
+                if formality:
+                    parts.append(f"formality: {formality}")
+                if address:
+                    parts.append(f"address: {address}")
+                if direction:
+                    parts.append(f"direction: {direction}")
+                if notes:
+                    parts.append(f"notes: {notes}")
+                style_notes = ", ".join(parts)
+            else:
+                style_notes = str(style)
+            lines.append(f"- {language}: {style_notes}")
+
+    lines.append("")
+    lines.append("## Target Languages")
+    lines.append(", ".join(target_languages))
+
+    lines.append("")
+    lines.append("## Strings to Translate")
+
+    for entry_info in entries:
+        idx = entry_info["index"]
+        msgid = entry_info["msgid"]
+        lines.append("")
+        lines.append(f"### String {idx}")
+        lines.append(f'msgid: "{msgid}"')
+
+        if entry_info.get("msgctxt"):
+            lines.append(f'context: "{entry_info["msgctxt"]}"')
+
+        if entry_info.get("comments"):
+            lines.append(f"Comments: {chr(10).join(entry_info['comments'])}")
+
+        if entry_info.get("snippets_text"):
+            lines.append(f"Source context:\n{entry_info['snippets_text']}")
+
+    lines.extend(
+        [
+            "",
+            "## Response Format",
+            "Return ONLY a JSON object mapping string index to translations:",
+            "{",
+        ]
+    )
+    for entry_info in entries:
+        idx = entry_info["index"]
+        lines.append(f'  "{idx}": {{"' + '": "...", "'.join(target_languages) + '": "..."},')
+    lines.append("}")
+
+    return "\n".join(lines)

@@ -98,6 +98,32 @@ def extract_snippets(
     return snippets
 
 
+def select_diverse_snippets(snippets: list[SourceSnippet], max_snippets: int = 3) -> list[SourceSnippet]:
+    """Select up to max_snippets, preferring snippets from diverse source files."""
+    if len(snippets) <= max_snippets:
+        return snippets
+
+    selected: list[SourceSnippet] = []
+    seen_files: set[str] = set()
+
+    # First pass: one snippet per unique file
+    for s in snippets:
+        if s.file_path not in seen_files:
+            selected.append(s)
+            seen_files.add(s.file_path)
+            if len(selected) >= max_snippets:
+                return selected
+
+    # Second pass: fill remaining slots from duplicates
+    for s in snippets:
+        if s not in selected:
+            selected.append(s)
+            if len(selected) >= max_snippets:
+                return selected
+
+    return selected
+
+
 def format_snippets(snippets: list[SourceSnippet]) -> str:
     """Format source snippets for inclusion in a translation prompt."""
     parts: list[str] = []
