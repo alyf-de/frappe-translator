@@ -67,6 +67,9 @@ async def translate_entries(
     entries_since_checkpoint = 0
     retry_contexts: list[AssembledContext] = []
 
+    total_translated = 0
+    total_errors = 0
+
     for batch_idx, (batch, raw) in enumerate(zip(batches, raw_results, strict=True)):
         batch_results, extracted_terms = _process_batch_result(batch, raw, target_languages)
 
@@ -81,12 +84,18 @@ async def translate_entries(
             # Invalidate cached regex pattern so new terms are matched
             glossary._compiled_pattern = None
 
+        batch_ok = 0
+        batch_err = 0
+        batch_skip = 0
         for ctx, result in zip(batch, batch_results, strict=True):
             if result.skipped:
                 retry_contexts.append(ctx)
+                batch_skip += 1
                 continue
 
             results.append(result)
+            batch_ok += len(result.translations)
+            batch_err += len(result.errors)
 
             if result.translations:
                 po_writer.buffer_translation(result)
@@ -96,6 +105,20 @@ async def translate_entries(
                 progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
 
             entries_since_checkpoint += 1
+
+        total_translated += batch_ok
+        total_errors += batch_err
+        entries_done = min((batch_idx + 1) * batch_size, len(contexts))
+        logger.info(
+            "Batch %d/%d done (%d/%d entries) — %d translated, %d errors, %d retries",
+            batch_idx + 1,
+            len(batches),
+            entries_done,
+            len(contexts),
+            batch_ok,
+            batch_err,
+            batch_skip,
+        )
 
         # Checkpoint after each batch
         if entries_since_checkpoint >= checkpoint_interval:
