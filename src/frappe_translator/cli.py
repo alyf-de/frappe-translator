@@ -42,7 +42,8 @@ def main() -> None:
     help="Translation mode",
 )
 @click.option("--concurrency", type=click.IntRange(1, 50), default=5, help="Max parallel claude processes")
-@click.option("--batch-size", type=int, default=50, help="Strings per Pass 1 batch")
+@click.option("--batch-size", type=int, default=50, help="Strings per batch")
+@click.option("--timeout", type=int, default=120, help="Timeout per claude call in seconds")
 @click.option("--model", type=str, default=None, help="Claude model to use (e.g., sonnet, opus)")
 @click.option("--resume/--no-resume", default=True, help="Resume from previous progress")
 @click.option("--dry-run", is_flag=True, help="Show what would be translated without running")
@@ -56,6 +57,7 @@ def translate(
     mode: str,
     concurrency: int,
     batch_size: int,
+    timeout: int,
     model: str | None,
     resume: bool,
     dry_run: bool,
@@ -76,6 +78,7 @@ def translate(
     cfg.mode = mode
     cfg.concurrency = concurrency
     cfg.batch_size = batch_size
+    cfg.timeout = timeout
     if model is not None:
         cfg.model = model
     cfg.resume = resume
