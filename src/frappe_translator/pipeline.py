@@ -115,22 +115,22 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             len(all_entries) - len(uncovered),
         )
 
+        new_terms: list[str] = []
         if uncovered:
             new_glossary = await extract_terms(uncovered, runner, config.batch_size)
             # Merge new terms into existing glossary
             for term in new_glossary.terms:
                 if term not in glossary.terms:
                     glossary.terms[term] = {}
+                    new_terms.append(term)
             # Mark these entries as extracted
             extracted_msgids.update(e.msgid for e in uncovered)
 
-        # Look up existing translations for all terms that don't have translations yet
-        terms_needing_lookup = [t for t, translations in glossary.terms.items() if not translations]
-        if terms_needing_lookup:
-            logger.info("Looking up translations for %d terms", len(terms_needing_lookup))
-            for term in terms_needing_lookup:
-                translations = lookup_term_translations(term, all_po_paths)
-                glossary.terms[term] = translations
+        # Look up translations only for newly extracted terms
+        if new_terms:
+            logger.info("Looking up translations for %d new terms", len(new_terms))
+            for term in new_terms:
+                glossary.terms[term] = lookup_term_translations(term, all_po_paths)
 
         # Persist glossary and extracted set
         with open(glossary_path, "w") as f:
