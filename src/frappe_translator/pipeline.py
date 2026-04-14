@@ -187,6 +187,8 @@ async def _process_app(
     # In fill-missing mode: include entry if ANY locale is missing it
     # In review-existing mode: include entry if ANY locale has it
     # In full-correct mode: include all entries
+    # Also track per-entry missing languages for fill-missing (to avoid overwriting existing)
+    missing_langs_per_entry: dict[tuple[str, str | None], set[str]] | None = None
     if target_languages and app.po_paths and config.mode != "full-correct":
         all_po_translations: dict[str, dict[tuple[str, str | None], str]] = {}
         for lang in target_languages:
@@ -195,16 +197,23 @@ async def _process_app(
 
         if all_po_translations:
             filtered: list[TranslationEntry] = []
-            for entry in entries:
-                key = (entry.msgid, entry.msgctxt)
-                if (
-                    config.mode == "fill-missing" and any(not po.get(key, "") for po in all_po_translations.values())
-                ) or (config.mode == "review-existing" and any(po.get(key, "") for po in all_po_translations.values())):
-                    filtered.append(entry)
+            if config.mode == "fill-missing":
+                missing_langs_per_entry = {}
+                for entry in entries:
+                    key = (entry.msgid, entry.msgctxt)
+                    missing = {lang for lang, po in all_po_translations.items() if not po.get(key, "")}
+                    if missing:
+                        filtered.append(entry)
+                        missing_langs_per_entry[key] = missing
+            elif config.mode == "review-existing":
+                for entry in entries:
+                    key = (entry.msgid, entry.msgctxt)
+                    if any(po.get(key, "") for po in all_po_translations.values()):
+                        filtered.append(entry)
             entries = filtered
 
-    # Filter by progress — skip fully-done entries
-    if config.resume:
+    # Filter by progress — skip fully-done entries (only in fill-missing mode)
+    if config.resume and config.mode == "fill-missing":
         pending_entries = []
         for entry in entries:
             pending_langs = progress.get_pending_languages(app.name, entry.msgid, entry.msgctxt, target_languages)
@@ -227,6 +236,7 @@ async def _process_app(
         glossary=glossary,
         target_languages=target_languages,
         style_config=style_config,
+        per_entry_languages=missing_langs_per_entry,
     )
 
     # Pass 2: Translation with batched writes

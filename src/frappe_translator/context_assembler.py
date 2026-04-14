@@ -21,11 +21,15 @@ def assemble_contexts(
     glossary: TermGlossary,
     target_languages: list[str],
     style_config: dict[str, Any],
+    per_entry_languages: dict[tuple[str, str | None], set[str]] | None = None,
 ) -> list[AssembledContext]:
     """Assemble full translation context for each entry.
 
     Reads source files once per unique path (via shared file cache) and builds the
     prompt string for each entry via build_translation_prompt.
+
+    If per_entry_languages is provided, each entry's prompt only requests translation
+    into the specified languages (used by fill-missing to skip already-translated locales).
     """
     file_cache: dict[str, list[str] | None] = {}
 
@@ -40,12 +44,21 @@ def assemble_contexts(
         glossary_terms = glossary.get_relevant_terms(entry.msgid)
         snippets_text = format_snippets(snippets)
 
+        # Use per-entry languages if available, otherwise all target languages
+        if per_entry_languages is not None:
+            key = (entry.msgid, entry.msgctxt)
+            entry_languages = sorted(per_entry_languages.get(key, set()))
+            entry_style = {lang: style_config[lang] for lang in entry_languages if lang in style_config}
+        else:
+            entry_languages = target_languages
+            entry_style = style_config
+
         prompt = build_translation_prompt(
             entry=entry,
             snippets_text=snippets_text,
             glossary_terms=glossary_terms,
-            target_languages=target_languages,
-            style_config=style_config,
+            target_languages=entry_languages,
+            style_config=entry_style,
         )
 
         assembled.append(
@@ -54,6 +67,7 @@ def assemble_contexts(
                 snippets=snippets,
                 glossary_terms=glossary_terms,
                 prompt=prompt,
+                target_languages=entry_languages,
             )
         )
 

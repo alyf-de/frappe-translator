@@ -29,6 +29,9 @@ async def translate_entries(
 
     Runs claude concurrently, validates results per-language, buffers translations,
     and checkpoints (flush + save) every checkpoint_interval entries.
+
+    Each context's target_languages field determines which languages are expected
+    in the response (may be a subset of the global target_languages in fill-missing mode).
     """
     results: list[TranslationResult] = []
 
@@ -44,7 +47,8 @@ async def translate_entries(
     # Process results
     entries_since_checkpoint = 0
     for i, (ctx, raw) in enumerate(zip(contexts, raw_results, strict=True)):
-        result = _process_single_result(ctx, raw, target_languages)
+        entry_langs = ctx.target_languages or target_languages
+        result = _process_single_result(ctx, raw, entry_langs)
         results.append(result)
 
         # Buffer successful translations

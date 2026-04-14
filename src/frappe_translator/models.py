@@ -67,6 +67,7 @@ class AssembledContext:
     snippets: list[SourceSnippet] = field(default_factory=list)
     glossary_terms: dict[str, dict[str, str]] = field(default_factory=dict)
     prompt: str = ""
+    target_languages: list[str] = field(default_factory=list)
 
 
 @dataclass
