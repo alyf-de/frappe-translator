@@ -132,12 +132,27 @@ def lookup_terms_batch(terms: list[str], all_po_paths: dict[str, dict[str, Path]
 
 
 class POWriter:
-    """Batched writer for PO files with per-locale async locking."""
+    """Batched writer for PO files with per-locale async locking.
+
+    Keeps PO files loaded in memory so flushes only save (no re-parse),
+    and uses a dict index for O(1) entry lookup instead of po.find().
+    """
 
     def __init__(self, po_paths: dict[str, Path]) -> None:
         self.po_paths = po_paths
         self._locks: dict[str, asyncio.Lock] = {locale: asyncio.Lock() for locale in po_paths}
         self._buffers: dict[str, list[tuple[str, str | None, str]]] = {locale: [] for locale in po_paths}
+        # Lazily loaded PO file objects and entry indices
+        self._po_files: dict[str, polib.POFile] = {}
+        self._entry_index: dict[str, dict[tuple[str, str | None], polib.POEntry]] = {}
+
+    def _get_po(self, locale: str) -> tuple[polib.POFile, dict[tuple[str, str | None], polib.POEntry]]:
+        """Get or lazily load the PO file and its entry index for a locale."""
+        if locale not in self._po_files:
+            po = polib.pofile(str(self.po_paths[locale]))
+            self._po_files[locale] = po
+            self._entry_index[locale] = {(e.msgid, e.msgctxt or None): e for e in po}
+        return self._po_files[locale], self._entry_index[locale]
 
     def buffer_translation(self, result: TranslationResult) -> None:
         """Buffer translations from a TranslationResult for later flushing."""
@@ -168,22 +183,20 @@ class POWriter:
             if not buffer:
                 return
             po_path = self.po_paths[locale]
-            # Run blocking polib I/O in a thread to avoid stalling the event loop
             count = len(buffer)
             try:
-                await asyncio.to_thread(self._write_po_file, po_path, buffer)
+                await asyncio.to_thread(self._apply_and_save, locale, buffer, po_path)
             except Exception:
                 logger.error("Failed to flush locale %s to %s", locale, po_path, exc_info=True)
                 return
             self._buffers[locale] = []
             logger.debug("Flushed %d translations to %s", count, po_path)
 
-    @staticmethod
-    def _write_po_file(po_path: Path, buffer: list[tuple[str, str | None, str]]) -> None:
-        """Blocking I/O: load, modify, and save a PO file. Runs in a thread."""
-        po = polib.pofile(str(po_path))
+    def _apply_and_save(self, locale: str, buffer: list[tuple[str, str | None, str]], po_path: Path) -> None:
+        """Blocking I/O: apply buffered translations and save. Runs in a thread."""
+        po, index = self._get_po(locale)
         for msgid, msgctxt, translated_str in buffer:
-            entry = po.find(msgid, msgctxt=msgctxt)
+            entry = index.get((msgid, msgctxt))
             if entry is not None:
                 entry.msgstr = translated_str
             else:
