@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -37,14 +38,34 @@ class TermGlossary:
 
     terms: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    _compiled_pattern: re.Pattern[str] | None = field(default=None, repr=False, compare=False)
+
+    def _build_pattern(self) -> None:
+        """Build a single compiled regex matching any glossary term."""
+        if not self.terms:
+            self._compiled_pattern = None
+            return
+        # Sort by length descending so longer terms match first
+        sorted_terms = sorted(self.terms.keys(), key=lambda t: -len(t))
+        pattern = "|".join(rf"\b{re.escape(t)}\b" for t in sorted_terms)
+        self._compiled_pattern = re.compile(pattern, re.IGNORECASE)
+
     def get_relevant_terms(self, text: str) -> dict[str, dict[str, str]]:
         """Return glossary entries for terms that appear in the given text."""
-        import re
-
+        if self._compiled_pattern is None:
+            self._build_pattern()
+        if self._compiled_pattern is None:
+            return {}
+        matches = self._compiled_pattern.findall(text)
+        if not matches:
+            return {}
+        # Normalize matched terms back to glossary keys (case-insensitive lookup)
+        terms_lower = {t.lower(): t for t in self.terms}
         relevant = {}
-        for term, translations in self.terms.items():
-            if re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE):
-                relevant[term] = translations
+        for m in matches:
+            key = terms_lower.get(m.lower())
+            if key and key not in relevant:
+                relevant[key] = self.terms[key]
         return relevant
 
 
