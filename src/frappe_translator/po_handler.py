@@ -104,6 +104,33 @@ def lookup_term_translations(term: str, all_po_paths: dict[str, dict[str, Path]]
     return found
 
 
+def lookup_terms_batch(terms: list[str], all_po_paths: dict[str, dict[str, Path]]) -> dict[str, dict[str, str]]:
+    """Look up translations for multiple terms, parsing each PO file only once.
+
+    Args:
+        terms: List of source terms to look up.
+        all_po_paths: {app_name: {locale: Path}}
+
+    Returns:
+        {term: {locale: translated_term}} — first non-empty match per locale wins.
+    """
+    terms_set = set(terms)
+    # {term: {locale: translation}}
+    found: dict[str, dict[str, str]] = {t: {} for t in terms}
+
+    for _app_name, locale_paths in all_po_paths.items():
+        for locale, po_path in locale_paths.items():
+            try:
+                translations = read_po_translations(po_path)
+            except Exception:
+                logger.warning("Failed to read PO file %s", po_path, exc_info=True)
+                continue
+            for (msgid, _msgctxt), msgstr in translations.items():
+                if msgid in terms_set and msgstr and locale not in found.get(msgid, {}):
+                    found.setdefault(msgid, {})[locale] = msgstr
+    return found
+
+
 class POWriter:
     """Batched writer for PO files with per-locale async locking."""
 

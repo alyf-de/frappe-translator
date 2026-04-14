@@ -12,7 +12,7 @@ from frappe_translator.discovery import discover_bench, get_target_languages, re
 from frappe_translator.models import TermGlossary, TranslationEntry
 from frappe_translator.po_handler import (
     POWriter,
-    lookup_term_translations,
+    lookup_terms_batch,
     read_po_translations,
     read_pot_entries,
 )
@@ -129,8 +129,9 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
         # Look up translations only for newly extracted terms
         if new_terms:
             logger.info("Looking up translations for %d new terms", len(new_terms))
-            for term in new_terms:
-                glossary.terms[term] = lookup_term_translations(term, all_po_paths)
+            batch_results = lookup_terms_batch(new_terms, all_po_paths)
+            for term, translations in batch_results.items():
+                glossary.terms[term] = translations
 
         # Persist glossary and extracted set
         with open(glossary_path, "w") as f:
