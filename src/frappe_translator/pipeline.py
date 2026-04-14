@@ -40,12 +40,10 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
         logger.error("No apps with POT files found in %s", bench_path)
         return summary
 
-    # Filter apps if specified
-    if config.apps:
-        all_apps = [a for a in all_apps if a.name in config.apps]
-
-    # Order apps
-    apps = resolve_app_order(all_apps, config.app_priority)
+    # Keep full app list for glossary building (cross-app term consistency),
+    # but only translate the filtered subset.
+    all_apps_ordered = resolve_app_order(all_apps, config.app_priority)
+    apps = [a for a in all_apps_ordered if a.name in config.apps] if config.apps else all_apps_ordered
     logger.info("Processing %d apps: %s", len(apps), [a.name for a in apps])
 
     # Determine target languages
@@ -76,14 +74,15 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             "direction": style.direction,
         }
 
-    # Collect all app PO paths for cross-app term lookup
+    # Collect PO paths from ALL apps for cross-app term lookup (not just filtered ones)
     all_po_paths: dict[str, dict[str, Path]] = {}
-    for app in apps:
+    for app in all_apps_ordered:
         all_po_paths[app.name] = app.po_paths
 
-    # Pass 1: Build a single bench-wide glossary (all apps' entries together)
+    # Pass 1: Build a single bench-wide glossary from ALL apps (not just filtered ones)
     glossary = TermGlossary()
     glossary_path = config.bench_path / "glossary.json"
+    extracted_path = config.bench_path / "glossary_extracted.json"
     if not config.skip_glossary:
         # Load existing glossary if available
         if glossary_path.exists():
@@ -93,23 +92,28 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
                 glossary.terms.update(existing)
                 logger.info("Loaded existing glossary with %d terms", len(glossary.terms))
 
-        # Collect all entries, then filter out those already covered by known terms
+        # Load set of msgids already processed for term extraction
+        extracted_msgids: set[str] = set()
+        if extracted_path.exists():
+            with open(extracted_path) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                extracted_msgids = {str(x) for x in data}
+
+        # Extract terms only from the apps being translated (not all bench apps).
+        # Term translations are still looked up across ALL apps' PO files.
         all_entries = []
         for app in apps:
             entries = read_pot_entries(app.pot_path)
             all_entries.extend(e for e in entries if not e.is_plural)
 
-        if glossary.terms:
-            uncovered = [e for e in all_entries if not glossary.get_relevant_terms(e.msgid)]
-            logger.info(
-                "Pass 1: %d/%d entries need term extraction (%d already covered by glossary)",
-                len(uncovered),
-                len(all_entries),
-                len(all_entries) - len(uncovered),
-            )
-        else:
-            uncovered = all_entries
-            logger.info("Pass 1: Extracting terms from %d entries across %d apps", len(all_entries), len(apps))
+        uncovered = [e for e in all_entries if e.msgid not in extracted_msgids]
+        logger.info(
+            "Pass 1: %d/%d entries need term extraction (%d already extracted)",
+            len(uncovered),
+            len(all_entries),
+            len(all_entries) - len(uncovered),
+        )
 
         if uncovered:
             new_glossary = await extract_terms(uncovered, runner, config.batch_size)
@@ -117,6 +121,8 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             for term in new_glossary.terms:
                 if term not in glossary.terms:
                     glossary.terms[term] = {}
+            # Mark these entries as extracted
+            extracted_msgids.update(e.msgid for e in uncovered)
 
         # Look up existing translations for all terms that don't have translations yet
         terms_needing_lookup = [t for t, translations in glossary.terms.items() if not translations]
@@ -126,9 +132,11 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
                 translations = lookup_term_translations(term, all_po_paths)
                 glossary.terms[term] = translations
 
-        # Persist bench-wide glossary
+        # Persist glossary and extracted set
         with open(glossary_path, "w") as f:
             json.dump(glossary.terms, f, indent=2, ensure_ascii=False)
+        with open(extracted_path, "w") as f:
+            json.dump(sorted(extracted_msgids), f, ensure_ascii=False)
         logger.info("Glossary saved to %s (%d terms)", glossary_path, len(glossary.terms))
 
     # Process each app in dependency order (Pass 2 only)

@@ -135,6 +135,12 @@ def clear_progress(bench_path: Path) -> None:
 
     tracker = ProgressTracker(bench_path)
     tracker.clear()
+
+    # Also clear glossary extraction cache
+    extracted_path = bench_path / "glossary_extracted.json"
+    if extracted_path.exists():
+        extracted_path.unlink()
+
     click.echo("Progress cleared.")
 
 
