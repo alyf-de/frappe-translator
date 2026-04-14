@@ -13,7 +13,6 @@ from frappe_translator.models import TermGlossary, TranslationEntry
 from frappe_translator.po_handler import (
     POWriter,
     lookup_terms_batch,
-    read_po_translations,
     read_pot_entries,
 )
 from frappe_translator.progress import ProgressTracker
@@ -193,6 +192,9 @@ async def _process_app(
 
     entries = [e for e in entries if not e.is_plural]
 
+    # Create POWriter early so filtering can reuse its loaded PO data
+    po_writer = POWriter(app.po_paths)
+
     # Filter entries based on run mode across ALL target locales
     # In fill-missing mode: include entry if ANY locale is missing it
     # In review-existing mode: include entry if ANY locale has it
@@ -203,7 +205,9 @@ async def _process_app(
         all_po_translations: dict[str, dict[tuple[str, str | None], str]] = {}
         for lang in target_languages:
             if lang in app.po_paths:
-                all_po_translations[lang] = read_po_translations(app.po_paths[lang])
+                # Use POWriter's cached PO data to avoid double-parsing
+                _po, index = po_writer._get_po(lang)
+                all_po_translations[lang] = {k: e.msgstr for k, e in index.items()}
 
         if all_po_translations:
             filtered: list[TranslationEntry] = []
@@ -250,8 +254,6 @@ async def _process_app(
     )
 
     # Pass 2: Translation with batched writes
-    # Filter target languages per-entry based on progress
-    po_writer = POWriter(app.po_paths)
     translation_results = await translate_entries(
         contexts=contexts,
         runner=runner,
