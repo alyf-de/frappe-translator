@@ -79,6 +79,9 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     for app in all_apps_ordered:
         all_po_paths[app.name] = app.po_paths
 
+    # Cache for POT entries to avoid re-parsing in _process_app
+    pot_cache: dict[str, list[TranslationEntry]] = {}
+
     # Pass 1: Build a single bench-wide glossary from ALL apps (not just filtered ones)
     glossary = TermGlossary()
     glossary_path = config.bench_path / "glossary.json"
@@ -102,9 +105,11 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
 
         # Extract terms only from the apps being translated (not all bench apps).
         # Term translations are still looked up across ALL apps' PO files.
+        # Cache POT entries so _process_app doesn't re-parse them.
         all_entries = []
         for app in apps:
             entries = read_pot_entries(app.pot_path)
+            pot_cache[app.name] = entries
             all_entries.extend(e for e in entries if not e.is_plural)
 
         uncovered = [e for e in all_entries if e.msgid not in extracted_msgids]
@@ -151,6 +156,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             target_languages=target_languages,
             style_config=style_config,
             glossary=glossary,
+            pot_cache=pot_cache,
         )
         summary.app_results[app.name] = app_results
 
@@ -167,12 +173,15 @@ async def _process_app(
     target_languages: list[str],
     style_config: dict,
     glossary: TermGlossary,
+    pot_cache: dict[str, list[TranslationEntry]] | None = None,
 ) -> AppResult:
     """Process a single app through the full pipeline."""
     result = AppResult(app_name=app.name)
 
-    # Read POT entries
-    entries = read_pot_entries(app.pot_path)
+    # Read POT entries (use cache from Pass 1 if available)
+    entries = pot_cache.get(app.name) if pot_cache else None
+    if entries is None:
+        entries = read_pot_entries(app.pot_path)
     result.total_entries = len(entries)
     logger.info("%s: %d entries in POT", app.name, len(entries))
 
