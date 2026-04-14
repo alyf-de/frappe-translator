@@ -51,6 +51,9 @@ async def extract_terms(
 
         try:
             data = parse_claude_json(result)
+            if not isinstance(data, dict):
+                logger.warning("Batch %d: expected dict, got %s", i + 1, type(data))
+                continue
             terms = data.get("terms", [])
             if isinstance(terms, list):
                 all_terms.update(str(t) for t in terms if t)

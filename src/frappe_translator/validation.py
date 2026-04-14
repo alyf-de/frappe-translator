@@ -46,13 +46,14 @@ def validate_placeholders(original: str, translated: str) -> list[str]:
     return errors
 
 
-def parse_claude_json(raw: str) -> dict:
+def parse_claude_json(raw: str) -> dict | list:
     """Parse JSON from claude CLI output, handling common wrapping patterns.
 
     Handles:
-    - Clean JSON
+    - Clean JSON (objects or arrays)
     - JSON wrapped in markdown code fences
     - JSON with leading/trailing text
+    - Claude CLI --output-format json envelope
     """
     raw = raw.strip()
 
@@ -61,8 +62,6 @@ def parse_claude_json(raw: str) -> dict:
         data = json.loads(raw)
         # Unwrap claude CLI --output-format json envelope if present
         if isinstance(data, dict) and "result" in data and isinstance(data["result"], str):
-            # The inner result may contain markdown fences or other wrapping —
-            # recursively parse it through the same extraction logic
             return parse_claude_json(data["result"])
         return data
     except json.JSONDecodeError:
@@ -76,21 +75,21 @@ def parse_claude_json(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Try finding JSON object in the text
-    brace_start = raw.find("{")
-    if brace_start >= 0:
-        # Find the matching closing brace
-        depth = 0
-        for i in range(brace_start, len(raw)):
-            if raw[i] == "{":
-                depth += 1
-            elif raw[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(raw[brace_start : i + 1])
-                    except json.JSONDecodeError:
-                        break
+    # Try finding JSON array or object in the text
+    for open_char, close_char in [("[", "]"), ("{", "}")]:
+        start = raw.find(open_char)
+        if start >= 0:
+            depth = 0
+            for i in range(start, len(raw)):
+                if raw[i] == open_char:
+                    depth += 1
+                elif raw[i] == close_char:
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(raw[start : i + 1])
+                        except json.JSONDecodeError:
+                            break
 
     raise ValueError(f"Could not parse JSON from claude output: {raw[:200]}")
 

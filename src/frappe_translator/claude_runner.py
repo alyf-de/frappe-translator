@@ -55,12 +55,12 @@ class ClaudeRunner:
                 self._backoff_until = new_until
                 logger.warning("Rate limited — backing off %.1fs (retry %d/%d)", delay, retry + 1, _MAX_RETRIES)
 
-    async def run(self, prompt: str) -> str:
+    async def run(self, prompt: str, json_schema: str | None = None) -> str:
         """Execute a single Claude CLI call with automatic retry on rate limits."""
         for retry in range(_MAX_RETRIES + 1):
             await self._wait_for_backoff()
             try:
-                result = await self._execute(prompt)
+                result = await self._execute(prompt, json_schema=json_schema)
                 # Check if the response itself is a rate limit error
                 if _is_rate_limited(result):
                     if retry < _MAX_RETRIES:
@@ -76,10 +76,11 @@ class ClaudeRunner:
 
         raise RuntimeError(f"Rate limited after {_MAX_RETRIES} retries")
 
-    async def _execute(self, prompt: str) -> str:
+    async def _execute(self, prompt: str, json_schema: str | None = None) -> str:
         """Execute a single Claude CLI call (no retry logic)."""
         async with self._semaphore:
             model_args = ["--model", self.model] if self.model else []
+            schema_args = ["--json-schema", json_schema] if json_schema else []
             process = await asyncio.create_subprocess_exec(
                 "claude",
                 "-p",
@@ -90,6 +91,7 @@ class ClaudeRunner:
                 "--disable-slash-commands",
                 "--no-session-persistence",
                 *model_args,
+                *schema_args,
                 stdin=PIPE,
                 stdout=PIPE,
                 stderr=PIPE,
@@ -123,12 +125,14 @@ class ClaudeRunner:
 
             return stdout
 
-    async def run_batch(self, prompts: list[str]) -> list[str | None]:
+    async def run_batch(self, prompts: list[str], json_schemas: list[str | None] | None = None) -> list[str | None]:
         """Run multiple prompts concurrently and return results in the same order.
 
         Failed prompts produce None in the result list.
+        If json_schemas is provided, each prompt gets its corresponding schema.
         """
-        tasks = [self.run(prompt) for prompt in prompts]
+        schemas = json_schemas or [None] * len(prompts)
+        tasks = [self.run(prompt, json_schema=schema) for prompt, schema in zip(prompts, schemas, strict=True)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         output: list[str | None] = []

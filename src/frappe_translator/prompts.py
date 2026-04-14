@@ -9,6 +9,30 @@ if TYPE_CHECKING:
     from frappe_translator.models import TranslationEntry
 
 
+def build_translation_schema(target_languages: list[str]) -> str:
+    """Build a JSON Schema for the translation response.
+
+    Returns a schema for an array of objects, each with msgid + language translations.
+    """
+    properties: dict[str, Any] = {
+        "msgid": {"type": "string"},
+    }
+    required = ["msgid"]
+    for lang in target_languages:
+        properties[lang] = {"type": "string"}
+        required.append(lang)
+
+    schema: dict[str, Any] = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        },
+    }
+    return json.dumps(schema)
+
+
 def unique_source_files(source_refs: list[str]) -> list[str]:
     """Extract unique file paths from source refs, preserving order."""
     seen: set[str] = set()
@@ -106,6 +130,7 @@ def build_translation_prompt(
                 style_notes = str(style)
             lines.append(f"- {language}: {style_notes}")
 
+    lang_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
     lines.extend(
         [
             "",
@@ -119,8 +144,8 @@ def build_translation_prompt(
             "## Target Languages",
             ", ".join(target_languages),
             "",
-            "Return ONLY a JSON object mapping language code to translated string:",
-            "{" + ", ".join(f'"{lang}": "..."' for lang in target_languages) + "}",
+            "Return a JSON array with one object containing the original msgid and translations:",
+            f'[{{"msgid": "...", {lang_fields}}}]',
         ]
     )
 
@@ -191,11 +216,10 @@ def build_batch_translation_prompt(
     lines.append("")
     lines.append("## Strings to Translate")
 
-    for entry_info in entries:
-        idx = entry_info["index"]
+    for i, entry_info in enumerate(entries):
         msgid = entry_info["msgid"]
         lines.append("")
-        lines.append(f"### String {idx}")
+        lines.append(f"### String {i + 1}")
         lines.append(f'msgid: "{msgid}"')
 
         if entry_info.get("msgctxt"):
@@ -209,17 +233,14 @@ def build_batch_translation_prompt(
         elif entry_info.get("source_files"):
             lines.append(f"Source: {', '.join(entry_info['source_files'])}")
 
+    lang_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
     lines.extend(
         [
             "",
             "## Response Format",
-            "Return ONLY a JSON object mapping string index to translations:",
-            "{",
+            "Return a JSON array of objects, one per string, each with the original msgid and translations:",
+            f'[{{"msgid": "...", {lang_fields}}}, ...]',
         ]
     )
-    for entry_info in entries:
-        idx = entry_info["index"]
-        lines.append(f'  "{idx}": {{"' + '": "...", "'.join(target_languages) + '": "..."},')
-    lines.append("}")
 
     return "\n".join(lines)

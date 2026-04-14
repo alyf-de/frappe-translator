@@ -6,9 +6,9 @@ import logging
 from typing import TYPE_CHECKING
 
 from frappe_translator.models import AssembledContext, TranslationResult
-from frappe_translator.prompts import build_batch_translation_prompt, unique_source_files
+from frappe_translator.prompts import build_batch_translation_prompt, build_translation_schema, unique_source_files
 from frappe_translator.source_context import format_snippets
-from frappe_translator.validation import parse_claude_json, validate_placeholders, validate_translation_result
+from frappe_translator.validation import parse_claude_json, validate_placeholders
 
 if TYPE_CHECKING:
     from frappe_translator.claude_runner import ClaudeRunner
@@ -51,14 +51,15 @@ async def translate_entries(
         len(batches),
     )
 
-    # Build batch prompts
+    # Build batch prompts and schemas
+    schema = build_translation_schema(target_languages)
     prompts: list[str] = []
     for batch in batches:
         prompt = _build_batch_prompt(batch, target_languages, style_config or {})
         prompts.append(prompt)
 
     # Run all batch prompts concurrently
-    raw_results = await runner.run_batch(prompts)
+    raw_results = await runner.run_batch(prompts, json_schemas=[schema] * len(prompts))
 
     # Process batch results
     entries_since_checkpoint = 0
@@ -69,7 +70,6 @@ async def translate_entries(
 
         for ctx, result in zip(batch, batch_results, strict=True):
             if result.skipped:
-                # Entire batch failed or this entry had no result — queue for individual retry
                 retry_contexts.append(ctx)
                 continue
 
@@ -100,7 +100,7 @@ async def translate_entries(
     if retry_contexts:
         logger.info("Retrying %d entries individually", len(retry_contexts))
         retry_prompts = [ctx.prompt for ctx in retry_contexts]
-        retry_raw = await runner.run_batch(retry_prompts)
+        retry_raw = await runner.run_batch(retry_prompts, json_schemas=[schema] * len(retry_prompts))
 
         for ctx, raw in zip(retry_contexts, retry_raw, strict=True):
             entry_langs = ctx.target_languages or target_languages
@@ -134,19 +134,16 @@ def _build_batch_prompt(
     style_config: dict,
 ) -> str:
     """Build a batch translation prompt from assembled contexts."""
-    # Collect union of glossary terms across the batch
     shared_glossary: dict[str, dict[str, str]] = {}
     for ctx in batch:
         shared_glossary.update(ctx.glossary_terms)
 
-    # Build per-entry info
     entries_info: list[dict] = []
-    for i, ctx in enumerate(batch):
+    for ctx in batch:
         snippets_text = format_snippets(ctx.snippets)
         source_files = unique_source_files(ctx.entry.source_refs) if not snippets_text else []
         entries_info.append(
             {
-                "index": i + 1,
                 "msgid": ctx.entry.msgid,
                 "msgctxt": ctx.entry.msgctxt,
                 "comments": ctx.entry.comments,
@@ -168,57 +165,38 @@ def _process_batch_result(
     raw: str | None,
     target_languages: list[str],
 ) -> list[TranslationResult]:
-    """Process a batch claude response into per-entry TranslationResults."""
-    results: list[TranslationResult] = []
-
+    """Process a batch claude response (array of objects) into per-entry TranslationResults."""
     if raw is None:
-        # Entire batch failed — mark all for retry
-        for ctx in batch:
-            result = TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True)
-            results.append(result)
-        return results
+        return [TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True) for ctx in batch]
 
-    # Parse JSON response
     try:
         data = parse_claude_json(raw)
     except ValueError as e:
         logger.warning("Failed to parse batch JSON response: %s", e)
-        for ctx in batch:
-            result = TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True)
-            results.append(result)
-        return results
+        return [TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True) for ctx in batch]
 
-    # Extract per-entry results by index
-    for i, ctx in enumerate(batch):
-        idx_key = str(i + 1)
-        entry_data = data.get(idx_key)
+    if not isinstance(data, list):
+        logger.warning("Batch response is not an array, marking all for retry")
+        return [TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True) for ctx in batch]
+
+    # Build lookup by msgid from the response array
+    response_by_msgid: dict[str, dict] = {}
+    for item in data:
+        if isinstance(item, dict) and "msgid" in item:
+            response_by_msgid[item["msgid"]] = item
+
+    results: list[TranslationResult] = []
+    for ctx in batch:
         entry_langs = ctx.target_languages or target_languages
+        entry_data = response_by_msgid.get(ctx.entry.msgid)
         result = TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt)
 
-        if entry_data is None or not isinstance(entry_data, dict):
-            # This entry missing from batch response — mark for retry
+        if entry_data is None:
             result.skipped = True
             results.append(result)
             continue
 
-        # Validate against expected languages
-        valid_translations, lang_errors = validate_translation_result(entry_data, entry_langs)
-        result.errors.update(lang_errors)
-
-        # Validate placeholders per language
-        for lang, translated in valid_translations.items():
-            placeholder_errors = validate_placeholders(ctx.entry.msgid, translated)
-            if placeholder_errors:
-                result.errors[lang] = "; ".join(placeholder_errors)
-                logger.warning(
-                    "Placeholder mismatch for '%s' [%s]: %s",
-                    ctx.entry.msgid[:50],
-                    lang,
-                    "; ".join(placeholder_errors),
-                )
-            else:
-                result.translations[lang] = translated
-
+        _validate_entry_translations(result, entry_data, ctx.entry.msgid, entry_langs)
         results.append(result)
 
     return results
@@ -229,7 +207,7 @@ def _process_single_result(
     raw: str | None,
     target_languages: list[str],
 ) -> TranslationResult:
-    """Process a single claude response into a TranslationResult (for retries)."""
+    """Process a single claude response (array with one object) into a TranslationResult."""
     result = TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt)
 
     if raw is None:
@@ -244,20 +222,47 @@ def _process_single_result(
         result.errors = {lang: f"JSON parse error: {e}" for lang in target_languages}
         return result
 
-    valid_translations, lang_errors = validate_translation_result(data, target_languages)
-    result.errors.update(lang_errors)
-
-    for lang, translated in valid_translations.items():
-        placeholder_errors = validate_placeholders(ctx.entry.msgid, translated)
-        if placeholder_errors:
-            result.errors[lang] = "; ".join(placeholder_errors)
-            logger.warning(
-                "Placeholder mismatch for '%s' [%s]: %s",
-                ctx.entry.msgid[:50],
-                lang,
-                "; ".join(placeholder_errors),
-            )
+    # Handle array response (expected from --json-schema)
+    if isinstance(data, list):
+        if len(data) > 0 and isinstance(data[0], dict):
+            entry_data = data[0]
         else:
-            result.translations[lang] = translated
+            result.errors = {lang: "Empty or invalid array response" for lang in target_languages}
+            return result
+    elif isinstance(data, dict):
+        entry_data = data
+    else:
+        result.errors = {lang: f"Unexpected response type: {type(data)}" for lang in target_languages}
+        return result
 
+    _validate_entry_translations(result, entry_data, ctx.entry.msgid, target_languages)
     return result
+
+
+def _validate_entry_translations(
+    result: TranslationResult,
+    entry_data: dict,
+    msgid: str,
+    target_languages: list[str],
+) -> None:
+    """Validate translations from a response dict and populate the result."""
+    for lang in target_languages:
+        translated = entry_data.get(lang)
+        if translated is None:
+            result.errors[lang] = f"Missing language '{lang}' in response"
+        elif not isinstance(translated, str):
+            result.errors[lang] = f"Translation for '{lang}' is not a string: {type(translated)}"
+        elif not translated.strip():
+            result.errors[lang] = f"Empty translation for '{lang}'"
+        else:
+            placeholder_errors = validate_placeholders(msgid, translated)
+            if placeholder_errors:
+                result.errors[lang] = "; ".join(placeholder_errors)
+                logger.warning(
+                    "Placeholder mismatch for '%s' [%s]: %s",
+                    msgid[:50],
+                    lang,
+                    "; ".join(placeholder_errors),
+                )
+            else:
+                result.translations[lang] = translated
