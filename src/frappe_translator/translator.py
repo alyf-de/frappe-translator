@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from frappe_translator.models import AssembledContext, TranslationResult
-from frappe_translator.prompts import build_batch_translation_prompt
+from frappe_translator.prompts import build_batch_translation_prompt, unique_source_files
 from frappe_translator.source_context import format_snippets
 from frappe_translator.validation import parse_claude_json, validate_placeholders, validate_translation_result
 
@@ -143,6 +143,7 @@ def _build_batch_prompt(
     entries_info: list[dict] = []
     for i, ctx in enumerate(batch):
         snippets_text = format_snippets(ctx.snippets)
+        source_files = unique_source_files(ctx.entry.source_refs) if not snippets_text else []
         entries_info.append(
             {
                 "index": i + 1,
@@ -150,6 +151,7 @@ def _build_batch_prompt(
                 "msgctxt": ctx.entry.msgctxt,
                 "comments": ctx.entry.comments,
                 "snippets_text": snippets_text,
+                "source_files": source_files,
             }
         )
 

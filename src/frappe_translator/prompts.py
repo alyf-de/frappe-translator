@@ -9,6 +9,18 @@ if TYPE_CHECKING:
     from frappe_translator.models import TranslationEntry
 
 
+def unique_source_files(source_refs: list[str]) -> list[str]:
+    """Extract unique file paths from source refs, preserving order."""
+    seen: set[str] = set()
+    files: list[str] = []
+    for ref in source_refs:
+        file_part, _, _ = ref.rpartition(":")
+        if file_part and file_part not in seen:
+            seen.add(file_part)
+            files.append(file_part)
+    return files
+
+
 def build_term_extraction_prompt(entries: list[TranslationEntry], batch_index: int) -> str:
     """Build a prompt asking Claude to extract key domain-specific terms from a batch of strings."""
     numbered = "\n".join(f"{i + 1}. {entry.msgid}" for i, entry in enumerate(entries))
@@ -59,6 +71,11 @@ def build_translation_prompt(
         lines.append("")
         lines.append("## Source Code Context")
         lines.append(snippets_text)
+    elif entry.source_refs:
+        source_files = unique_source_files(entry.source_refs)
+        if source_files:
+            lines.append("")
+            lines.append(f"Source: {', '.join(source_files)}")
 
     if glossary_terms:
         lines.append("")
@@ -189,6 +206,8 @@ def build_batch_translation_prompt(
 
         if entry_info.get("snippets_text"):
             lines.append(f"Source context:\n{entry_info['snippets_text']}")
+        elif entry_info.get("source_files"):
+            lines.append(f"Source: {', '.join(entry_info['source_files'])}")
 
     lines.extend(
         [
