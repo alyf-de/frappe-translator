@@ -197,8 +197,8 @@ def _dry_run(cfg: TranslatorConfig) -> None:
         total_entries += len(filtered)
 
     click.echo(f"\nTotal: {total_entries} entries x {len(target_languages)} languages")
+    estimated_batches = (total_entries + cfg.batch_size - 1) // cfg.batch_size
     if not cfg.skip_glossary:
-        estimated_pass1 = (total_entries + cfg.batch_size - 1) // cfg.batch_size
-        click.echo(f"Estimated claude calls: ~{estimated_pass1} (Pass 1) + ~{total_entries} (Pass 2)")
+        click.echo(f"Estimated claude calls: ~{estimated_batches} (Pass 1) + ~{estimated_batches} (Pass 2)")
     else:
-        click.echo(f"Estimated claude calls: ~{total_entries} (single pass)")
+        click.echo(f"Estimated claude calls: ~{estimated_batches} (single pass)")

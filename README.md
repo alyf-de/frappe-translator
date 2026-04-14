@@ -74,13 +74,13 @@ frappe-translator clear-progress /path/to/bench
 
 1. **Pass 1 (term extraction):** Batches all translatable strings and sends them to Claude to extract key domain-specific terms (e.g., "Invoice", "Purchase Order", "DocType"). Existing translations for these terms are looked up across all PO files to build a glossary. This pass is optional (`--skip-glossary`) and cached across runs.
 
-2. **Pass 2 (translation):** Each string is sent to Claude with full context:
-   - Source code snippets (5 lines around each reference)
+2. **Pass 2 (translation):** Strings are batched (default 50 per call) and sent to Claude with full context:
+   - Source code snippets (up to 3 per string, from diverse files)
    - Term glossary with existing translations
    - Extractor comments from the POT file
    - Per-language style instructions (formality, address form)
 
-   The LLM translates into all target languages at once, producing a JSON response like `{"de": "...", "fr": "..."}`.
+   The LLM translates each string into all target languages at once. Failed batches are retried individually.
 
 ### Key design decisions
 
