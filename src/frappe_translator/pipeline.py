@@ -156,6 +156,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             target_languages=target_languages,
             style_config=style_config,
             glossary=glossary,
+            glossary_path=glossary_path,
             pot_cache=pot_cache,
         )
         summary.app_results[app.name] = app_results
@@ -179,6 +180,7 @@ async def _process_app(
     target_languages: list[str],
     style_config: dict,
     glossary: TermGlossary,
+    glossary_path: Path | None = None,
     pot_cache: dict[str, list[TranslationEntry]] | None = None,
 ) -> AppResult:
     """Process a single app through the full pipeline."""
@@ -270,6 +272,7 @@ async def _process_app(
         target_languages=target_languages,
         style_config=style_config,
         glossary=glossary,
+        glossary_path=glossary_path,
         checkpoint_interval=config.checkpoint_interval,
         batch_size=config.batch_size,
     )

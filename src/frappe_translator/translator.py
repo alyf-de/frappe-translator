@@ -12,6 +12,8 @@ from frappe_translator.source_context import format_snippets
 from frappe_translator.validation import parse_claude_json, validate_placeholders
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from frappe_translator.claude_runner import ClaudeRunner
     from frappe_translator.po_handler import POWriter
     from frappe_translator.progress import ProgressTracker
@@ -28,6 +30,7 @@ async def translate_entries(
     target_languages: list[str],
     style_config: dict | None = None,
     glossary: TermGlossary | None = None,
+    glossary_path: Path | None = None,
     checkpoint_interval: int = 50,
     batch_size: int = 50,
 ) -> list[TranslationResult]:
@@ -141,6 +144,11 @@ async def translate_entries(
             )
             await po_writer.flush_all()
             progress.save()
+            if glossary is not None and glossary_path is not None and glossary.terms:
+                import json
+
+                with open(glossary_path, "w") as f:
+                    json.dump(glossary.terms, f, indent=2, ensure_ascii=False)
             entries_since_checkpoint = 0
 
     # Retry failed entries individually using their pre-built prompts
