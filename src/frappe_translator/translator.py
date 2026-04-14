@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -53,78 +54,88 @@ async def translate_entries(
         len(batches),
     )
 
-    # Build batch prompts and schemas
+    # Build batch prompts and schemas, launch as async tasks
     schema = build_translation_schema(target_languages)
-    prompts: list[str] = []
-    for batch in batches:
+
+    async def _run_one(batch_idx: int, batch: list[AssembledContext]) -> tuple[int, str | None]:
         prompt = _build_batch_prompt(batch, target_languages, style_config or {})
-        prompts.append(prompt)
+        try:
+            raw = await runner.run(prompt, json_schema=schema)
+        except Exception as e:
+            logger.error("Batch %d failed: %s", batch_idx + 1, e)
+            raw = None
+        return batch_idx, raw
 
-    # Run all batch prompts concurrently
-    raw_results = await runner.run_batch(prompts, json_schemas=[schema] * len(prompts))
+    # Launch all tasks — the runner's semaphore limits actual concurrency
+    pending = {asyncio.ensure_future(_run_one(i, b)): i for i, b in enumerate(batches)}
 
-    # Process batch results
     entries_since_checkpoint = 0
     retry_contexts: list[AssembledContext] = []
-
     total_translated = 0
     total_errors = 0
+    batches_done = 0
 
-    for batch_idx, (batch, raw) in enumerate(zip(batches, raw_results, strict=True)):
-        batch_results, extracted_terms = _process_batch_result(batch, raw, target_languages)
+    while pending:
+        done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            batch_idx, raw = task.result()
+            batch = batches[batch_idx]
+            del pending[task]
+            batches_done += 1
 
-        # Merge extracted terms into glossary for subsequent batches
-        if extracted_terms and glossary is not None:
-            for term, translations in extracted_terms.items():
-                if isinstance(translations, dict):
-                    existing = glossary.terms.get(term, {})
-                    # Only add translations for locales not already in glossary
-                    merged = {**translations, **existing}
-                    glossary.terms[term] = merged
-            # Invalidate cached regex pattern so new terms are matched
-            glossary._compiled_pattern = None
+            batch_results, extracted_terms = _process_batch_result(batch, raw, target_languages)
 
-        batch_ok = 0
-        batch_err = 0
-        batch_skip = 0
-        for ctx, result in zip(batch, batch_results, strict=True):
-            if result.skipped:
-                retry_contexts.append(ctx)
-                batch_skip += 1
-                continue
+            # Merge extracted terms into glossary for subsequent batches
+            if extracted_terms and glossary is not None:
+                for term, translations in extracted_terms.items():
+                    if isinstance(translations, dict):
+                        existing = glossary.terms.get(term, {})
+                        merged = {**translations, **existing}
+                        glossary.terms[term] = merged
+                glossary._compiled_pattern = None
 
-            results.append(result)
-            batch_ok += len(result.translations)
-            batch_err += len(result.errors)
+            batch_ok = 0
+            batch_err = 0
+            batch_skip = 0
+            for ctx, result in zip(batch, batch_results, strict=True):
+                if result.skipped:
+                    retry_contexts.append(ctx)
+                    batch_skip += 1
+                    continue
 
-            if result.translations:
-                po_writer.buffer_translation(result)
-                progress.mark_languages_done(app_name, result.msgid, result.msgctxt, list(result.translations.keys()))
+                results.append(result)
+                batch_ok += len(result.translations)
+                batch_err += len(result.errors)
 
-            for lang, error in result.errors.items():
-                progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
+                if result.translations:
+                    po_writer.buffer_translation(result)
+                    progress.mark_languages_done(
+                        app_name, result.msgid, result.msgctxt, list(result.translations.keys())
+                    )
 
-            entries_since_checkpoint += 1
+                for lang, error in result.errors.items():
+                    progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
 
-        total_translated += batch_ok
-        total_errors += batch_err
-        entries_done = min((batch_idx + 1) * batch_size, len(contexts))
-        logger.info(
-            "Batch %d/%d done (%d/%d entries) — %d translated, %d errors, %d retries",
-            batch_idx + 1,
-            len(batches),
-            entries_done,
-            len(contexts),
-            batch_ok,
-            batch_err,
-            batch_skip,
-        )
+                entries_since_checkpoint += 1
 
-        # Checkpoint after each batch
+            total_translated += batch_ok
+            total_errors += batch_err
+            logger.info(
+                "Batch %d/%d done (%d/%d batches complete) — %d translated, %d errors, %d retries",
+                batch_idx + 1,
+                len(batches),
+                batches_done,
+                len(batches),
+                batch_ok,
+                batch_err,
+                batch_skip,
+            )
+
+        # Checkpoint after processing completed batches
         if entries_since_checkpoint >= checkpoint_interval:
             logger.info(
-                "Checkpoint at batch %d/%d (%d entries), flushing...",
-                batch_idx + 1,
+                "Checkpoint (%d/%d batches, %d entries), flushing...",
+                batches_done,
                 len(batches),
                 entries_since_checkpoint,
             )
@@ -135,27 +146,45 @@ async def translate_entries(
     # Retry failed entries individually using their pre-built prompts
     if retry_contexts:
         logger.info("Retrying %d entries individually", len(retry_contexts))
-        retry_prompts = [ctx.prompt for ctx in retry_contexts]
-        retry_raw = await runner.run_batch(retry_prompts, json_schemas=[schema] * len(retry_prompts))
 
-        for ctx, raw in zip(retry_contexts, retry_raw, strict=True):
-            entry_langs = ctx.target_languages or target_languages
-            result, retry_terms = _process_single_result(ctx, raw, entry_langs)
-            results.append(result)
+        async def _retry_one(ctx: AssembledContext) -> tuple[AssembledContext, str | None]:
+            try:
+                raw = await runner.run(ctx.prompt, json_schema=schema)
+            except Exception as e:
+                logger.error("Retry failed for '%s': %s", ctx.entry.msgid[:50], e)
+                raw = None
+            return ctx, raw
 
-            if retry_terms and glossary is not None:
-                for term, translations in retry_terms.items():
-                    if isinstance(translations, dict):
-                        existing = glossary.terms.get(term, {})
-                        glossary.terms[term] = {**translations, **existing}
-                glossary._compiled_pattern = None
+        retry_pending = {asyncio.ensure_future(_retry_one(ctx)): ctx for ctx in retry_contexts}
+        retries_done = 0
+        while retry_pending:
+            done, _ = await asyncio.wait(retry_pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                ctx, raw = task.result()
+                del retry_pending[task]
+                retries_done += 1
 
-            if result.translations:
-                po_writer.buffer_translation(result)
-                progress.mark_languages_done(app_name, result.msgid, result.msgctxt, list(result.translations.keys()))
+                entry_langs = ctx.target_languages or target_languages
+                result, retry_terms = _process_single_result(ctx, raw, entry_langs)
+                results.append(result)
 
-            for lang, error in result.errors.items():
-                progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
+                if retry_terms and glossary is not None:
+                    for term, translations in retry_terms.items():
+                        if isinstance(translations, dict):
+                            existing = glossary.terms.get(term, {})
+                            glossary.terms[term] = {**translations, **existing}
+                    glossary._compiled_pattern = None
+
+                if result.translations:
+                    po_writer.buffer_translation(result)
+                    progress.mark_languages_done(
+                        app_name, result.msgid, result.msgctxt, list(result.translations.keys())
+                    )
+
+                for lang, error in result.errors.items():
+                    progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
+
+                logger.info("Retry %d/%d done: '%s'", retries_done, len(retry_contexts), ctx.entry.msgid[:50])
 
     # Summary
     translated = sum(1 for r in results if r.translations)
