@@ -85,15 +85,16 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     glossary = TermGlossary()
     glossary_path = config.bench_path / "glossary.json"
     extracted_path = config.bench_path / "glossary_extracted.json"
-    if not config.skip_glossary:
-        # Load existing glossary if available
-        if glossary_path.exists():
-            with open(glossary_path) as f:
-                existing = json.load(f)
-            if isinstance(existing, dict):
-                glossary.terms.update(existing)
-                logger.info("Loaded existing glossary with %d terms", len(glossary.terms))
 
+    # Always load existing glossary (Pass 2 enriches it even with --skip-glossary)
+    if glossary_path.exists():
+        with open(glossary_path) as f:
+            existing = json.load(f)
+        if isinstance(existing, dict):
+            glossary.terms.update(existing)
+            logger.info("Loaded existing glossary with %d terms", len(glossary.terms))
+
+    if not config.skip_glossary:
         # Load set of msgids already processed for term extraction
         extracted_msgids: set[str] = set()
         if extracted_path.exists():
