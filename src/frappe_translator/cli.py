@@ -33,8 +33,8 @@ def main() -> None:
 @main.command()
 @click.argument("bench_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--config", "-c", type=click.Path(exists=True, path_type=Path), default=None, help="Config TOML file")
-@click.option("--apps", "-a", multiple=True, help="Specific apps to translate (default: all)")
-@click.option("--languages", "-l", multiple=True, help="Target languages (default: all found)")
+@click.option("--app", "-a", multiple=True, help="App to translate (repeatable, default: all)")
+@click.option("--language", "-l", multiple=True, help="Target language (repeatable, default: all found)")
 @click.option(
     "--mode",
     type=click.Choice(["fill-missing", "review-existing", "full-correct"]),
@@ -51,8 +51,8 @@ def main() -> None:
 def translate(
     bench_path: Path,
     config: Path | None,
-    apps: tuple[str, ...],
-    languages: tuple[str, ...],
+    app: tuple[str, ...],
+    language: tuple[str, ...],
     mode: str,
     concurrency: int,
     batch_size: int,
@@ -69,10 +69,10 @@ def translate(
 
     cfg = load_config(config)
     cfg.bench_path = bench_path
-    if apps:
-        cfg.apps = list(apps)
-    if languages:
-        cfg.languages = list(languages)
+    if app:
+        cfg.apps = list(app)
+    if language:
+        cfg.languages = list(language)
     cfg.mode = mode
     cfg.concurrency = concurrency
     cfg.batch_size = batch_size
@@ -102,8 +102,8 @@ def translate(
 
 @main.command()
 @click.argument("bench_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--apps", "-a", multiple=True, help="Specific apps (default: all)")
-def status(bench_path: Path, apps: tuple[str, ...]) -> None:
+@click.option("--app", "-a", multiple=True, help="App to check (repeatable, default: all)")
+def status(bench_path: Path, app: tuple[str, ...]) -> None:
     """Show translation coverage statistics."""
     _setup_logging(verbose=False)
 
@@ -111,8 +111,8 @@ def status(bench_path: Path, apps: tuple[str, ...]) -> None:
     from frappe_translator.po_handler import read_po_translations, read_pot_entries
 
     all_apps = discover_bench(bench_path)
-    if apps:
-        all_apps = [a for a in all_apps if a.name in apps]
+    if app:
+        all_apps = [a for a in all_apps if a.name in app]
     all_apps = resolve_app_order(all_apps, ["frappe", "erpnext", "hrms"])
 
     for app in all_apps:

@@ -66,7 +66,7 @@ class TestStatus:
 
     def test_filters_by_app(self, tmp_bench: Path) -> None:
         runner = CliRunner()
-        result = runner.invoke(main, ["status", str(tmp_bench), "--apps", "sample_app"])
+        result = runner.invoke(main, ["status", str(tmp_bench), "--app", "sample_app"])
         assert result.exit_code == 0
         assert "sample_app" in result.output
 
