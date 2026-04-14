@@ -61,8 +61,13 @@ def parse_claude_json(raw: str) -> dict | list:
     try:
         data = json.loads(raw)
         # Unwrap claude CLI --output-format json envelope if present
-        if isinstance(data, dict) and "result" in data and isinstance(data["result"], str):
-            return parse_claude_json(data["result"])
+        if isinstance(data, dict):
+            # --json-schema responses put the parsed result in structured_output
+            if "structured_output" in data and data["structured_output"] is not None:
+                return data["structured_output"]
+            # Regular responses put text in result
+            if "result" in data and isinstance(data["result"], str):
+                return parse_claude_json(data["result"])
         return data
     except json.JSONDecodeError:
         pass
