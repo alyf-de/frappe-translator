@@ -110,17 +110,17 @@ def status(bench_path: Path, app: tuple[str, ...]) -> None:
     from frappe_translator.discovery import discover_bench, resolve_app_order
     from frappe_translator.po_handler import read_po_translations, read_pot_entries
 
-    all_apps = discover_bench(bench_path)
+    discovered = discover_bench(bench_path)
     if app:
-        all_apps = [a for a in all_apps if a.name in app]
-    all_apps = resolve_app_order(all_apps, ["frappe", "erpnext", "hrms"])
+        discovered = [a for a in discovered if a.name in app]
+    discovered = resolve_app_order(discovered, ["frappe", "erpnext", "hrms"])
 
-    for app in all_apps:
-        entries = read_pot_entries(app.pot_path)
+    for app_info in discovered:
+        entries = read_pot_entries(app_info.pot_path)
         total = len(entries)
-        click.echo(f"\n{app.name}: {total} entries")
+        click.echo(f"\n{app_info.name}: {total} entries")
 
-        for locale, po_path in sorted(app.po_paths.items()):
+        for locale, po_path in sorted(app_info.po_paths.items()):
             translations = read_po_translations(po_path)
             translated = sum(1 for v in translations.values() if v.strip())
             pct = (translated / total * 100) if total > 0 else 0
