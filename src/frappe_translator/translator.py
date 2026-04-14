@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from frappe_translator.models import AssembledContext, TranslationResult
+from frappe_translator.models import AssembledContext, TermGlossary, TranslationResult
 from frappe_translator.prompts import build_batch_translation_prompt, build_translation_schema, unique_source_files
 from frappe_translator.source_context import format_snippets
 from frappe_translator.validation import parse_claude_json, validate_placeholders
@@ -26,6 +26,7 @@ async def translate_entries(
     app_name: str,
     target_languages: list[str],
     style_config: dict | None = None,
+    glossary: TermGlossary | None = None,
     checkpoint_interval: int = 50,
     batch_size: int = 50,
 ) -> list[TranslationResult]:
@@ -33,6 +34,7 @@ async def translate_entries(
 
     Groups contexts into batches, sends one Claude call per batch, validates
     results, and retries failed entries individually.
+    If glossary is provided, new terms from responses are merged into it.
     """
     results: list[TranslationResult] = []
 
@@ -66,7 +68,18 @@ async def translate_entries(
     retry_contexts: list[AssembledContext] = []
 
     for batch_idx, (batch, raw) in enumerate(zip(batches, raw_results, strict=True)):
-        batch_results = _process_batch_result(batch, raw, target_languages)
+        batch_results, extracted_terms = _process_batch_result(batch, raw, target_languages)
+
+        # Merge extracted terms into glossary for subsequent batches
+        if extracted_terms and glossary is not None:
+            for term, translations in extracted_terms.items():
+                if isinstance(translations, dict):
+                    existing = glossary.terms.get(term, {})
+                    # Only add translations for locales not already in glossary
+                    merged = {**translations, **existing}
+                    glossary.terms[term] = merged
+            # Invalidate cached regex pattern so new terms are matched
+            glossary._compiled_pattern = None
 
         for ctx, result in zip(batch, batch_results, strict=True):
             if result.skipped:
@@ -104,8 +117,15 @@ async def translate_entries(
 
         for ctx, raw in zip(retry_contexts, retry_raw, strict=True):
             entry_langs = ctx.target_languages or target_languages
-            result = _process_single_result(ctx, raw, entry_langs)
+            result, retry_terms = _process_single_result(ctx, raw, entry_langs)
             results.append(result)
+
+            if retry_terms and glossary is not None:
+                for term, translations in retry_terms.items():
+                    if isinstance(translations, dict):
+                        existing = glossary.terms.get(term, {})
+                        glossary.terms[term] = {**translations, **existing}
+                glossary._compiled_pattern = None
 
             if result.translations:
                 po_writer.buffer_translation(result)
@@ -164,24 +184,46 @@ def _process_batch_result(
     batch: list[AssembledContext],
     raw: str | None,
     target_languages: list[str],
-) -> list[TranslationResult]:
-    """Process a batch claude response (array of objects) into per-entry TranslationResults."""
+) -> tuple[list[TranslationResult], dict[str, dict[str, str]]]:
+    """Process a batch claude response into per-entry TranslationResults.
+
+    Returns (results, extracted_terms) where extracted_terms maps term -> {locale: translation}.
+    """
+    _skip_all = (
+        [TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True) for ctx in batch],
+        {},
+    )
+
     if raw is None:
-        return [TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True) for ctx in batch]
+        return _skip_all
 
     try:
         data = parse_claude_json(raw)
     except ValueError as e:
         logger.warning("Failed to parse batch JSON response: %s", e)
-        return [TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True) for ctx in batch]
+        return _skip_all
 
-    if not isinstance(data, list):
-        logger.warning("Batch response is not an array, marking all for retry")
-        return [TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt, skipped=True) for ctx in batch]
+    # Expect {"translations": [...], "terms": {...}}
+    if isinstance(data, dict):
+        translations_list = data.get("translations", [])
+        extracted_terms = data.get("terms", {})
+    elif isinstance(data, list):
+        # Fallback: plain array without terms wrapper
+        translations_list = data
+        extracted_terms = {}
+    else:
+        logger.warning("Unexpected batch response type: %s", type(data))
+        return _skip_all
+
+    if not isinstance(translations_list, list):
+        logger.warning("translations field is not an array, marking all for retry")
+        return _skip_all
+    if not isinstance(extracted_terms, dict):
+        extracted_terms = {}
 
     # Build lookup by msgid from the response array
     response_by_msgid: dict[str, dict] = {}
-    for item in data:
+    for item in translations_list:
         if isinstance(item, dict) and "msgid" in item:
             response_by_msgid[item["msgid"]] = item
 
@@ -199,44 +241,63 @@ def _process_batch_result(
         _validate_entry_translations(result, entry_data, ctx.entry.msgid, entry_langs)
         results.append(result)
 
-    return results
+    return results, extracted_terms
 
 
 def _process_single_result(
     ctx: AssembledContext,
     raw: str | None,
     target_languages: list[str],
-) -> TranslationResult:
-    """Process a single claude response (array with one object) into a TranslationResult."""
+) -> tuple[TranslationResult, dict[str, dict[str, str]]]:
+    """Process a single claude response into a TranslationResult.
+
+    Returns (result, extracted_terms).
+    """
     result = TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt)
 
     if raw is None:
         result.skipped = True
         result.errors = {lang: "claude CLI call failed" for lang in target_languages}
-        return result
+        return result, {}
 
     try:
         data = parse_claude_json(raw)
     except ValueError as e:
         logger.warning("Failed to parse JSON for '%s': %s", ctx.entry.msgid[:50], e)
         result.errors = {lang: f"JSON parse error: {e}" for lang in target_languages}
-        return result
+        return result, {}
 
-    # Handle array response (expected from --json-schema)
-    if isinstance(data, list):
+    extracted_terms: dict[str, dict[str, str]] = {}
+
+    # Handle {"translations": [...], "terms": {...}} envelope
+    if isinstance(data, dict) and "translations" in data:
+        extracted_terms = data.get("terms", {})
+        if not isinstance(extracted_terms, dict):
+            extracted_terms = {}
+        translations_list = data["translations"]
+        if isinstance(translations_list, list) and len(translations_list) > 0:
+            entry_data = translations_list[0]
+        else:
+            result.errors = {lang: "Empty translations array" for lang in target_languages}
+            return result, extracted_terms
+    elif isinstance(data, list):
         if len(data) > 0 and isinstance(data[0], dict):
             entry_data = data[0]
         else:
             result.errors = {lang: "Empty or invalid array response" for lang in target_languages}
-            return result
+            return result, {}
     elif isinstance(data, dict):
         entry_data = data
     else:
         result.errors = {lang: f"Unexpected response type: {type(data)}" for lang in target_languages}
-        return result
+        return result, {}
 
-    _validate_entry_translations(result, entry_data, ctx.entry.msgid, target_languages)
-    return result
+    if isinstance(entry_data, dict):
+        _validate_entry_translations(result, entry_data, ctx.entry.msgid, target_languages)
+    else:
+        result.errors = {lang: "Invalid entry data" for lang in target_languages}
+
+    return result, extracted_terms
 
 
 def _validate_entry_translations(

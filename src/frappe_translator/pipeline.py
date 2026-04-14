@@ -159,6 +159,12 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
         )
         summary.app_results[app.name] = app_results
 
+    # Save glossary with any new terms discovered during Pass 2
+    if glossary.terms:
+        with open(glossary_path, "w") as f:
+            json.dump(glossary.terms, f, indent=2, ensure_ascii=False)
+        logger.info("Glossary updated: %d terms", len(glossary.terms))
+
     # Print summary
     summary.log_summary()
     return summary
@@ -262,6 +268,7 @@ async def _process_app(
         app_name=app.name,
         target_languages=target_languages,
         style_config=style_config,
+        glossary=glossary,
         checkpoint_interval=config.checkpoint_interval,
         batch_size=config.batch_size,
     )

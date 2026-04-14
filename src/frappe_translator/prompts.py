@@ -12,23 +12,36 @@ if TYPE_CHECKING:
 def build_translation_schema(target_languages: list[str]) -> str:
     """Build a JSON Schema for the translation response.
 
-    Returns a schema for an array of objects, each with msgid + language translations.
+    Returns a schema for an object with:
+    - translations: array of objects, each with msgid + language translations
+    - terms: object mapping term -> {locale: translation} for glossary enrichment
     """
-    properties: dict[str, Any] = {
-        "msgid": {"type": "string"},
-    }
+    translation_props: dict[str, Any] = {"msgid": {"type": "string"}}
     required = ["msgid"]
     for lang in target_languages:
-        properties[lang] = {"type": "string"}
+        translation_props[lang] = {"type": "string"}
         required.append(lang)
 
     schema: dict[str, Any] = {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": properties,
-            "required": required,
+        "type": "object",
+        "properties": {
+            "translations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": translation_props,
+                    "required": required,
+                },
+            },
+            "terms": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            },
         },
+        "required": ["translations"],
     }
     return json.dumps(schema)
 
@@ -66,6 +79,13 @@ def build_term_extraction_prompt(entries: list[TranslationEntry], batch_index: i
         "---\n"
         f"{numbered}"
     )
+
+
+def _response_format_example(target_languages: list[str]) -> str:
+    """Build a response format example string for translation prompts."""
+    lang_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
+    term_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
+    return '{"translations": [{"msgid": "...", ' + lang_fields + '}], "terms": {"Term": {' + term_fields + "}}}"
 
 
 def build_translation_prompt(
@@ -130,7 +150,6 @@ def build_translation_prompt(
                 style_notes = str(style)
             lines.append(f"- {language}: {style_notes}")
 
-    lang_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
     lines.extend(
         [
             "",
@@ -144,8 +163,12 @@ def build_translation_prompt(
             "## Target Languages",
             ", ".join(target_languages),
             "",
-            "Return a JSON array with one object containing the original msgid and translations:",
-            f'[{{"msgid": "...", {lang_fields}}}]',
+            "## Response Format",
+            "Return a JSON object with translations and any domain-specific terms you translated:",
+            _response_format_example(target_languages),
+            "",
+            "Include in terms: business terms, UI actions, DocType names, and technical terms"
+            " that should be translated consistently across the application.",
         ]
     )
 
@@ -233,13 +256,15 @@ def build_batch_translation_prompt(
         elif entry_info.get("source_files"):
             lines.append(f"Source: {', '.join(entry_info['source_files'])}")
 
-    lang_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
     lines.extend(
         [
             "",
             "## Response Format",
-            "Return a JSON array of objects, one per string, each with the original msgid and translations:",
-            f'[{{"msgid": "...", {lang_fields}}}, ...]',
+            "Return a JSON object with translations and any domain-specific terms you translated:",
+            _response_format_example(target_languages),
+            "",
+            "Include in terms: business terms, UI actions, DocType names, and technical terms"
+            " that should be translated consistently across the application.",
         ]
     )
 
