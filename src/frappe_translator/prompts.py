@@ -81,13 +81,6 @@ def build_term_extraction_prompt(entries: list[TranslationEntry], batch_index: i
     )
 
 
-def _response_format_example(target_languages: list[str]) -> str:
-    """Build a response format example string for translation prompts."""
-    lang_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
-    term_fields = ", ".join(f'"{lang}": "..."' for lang in target_languages)
-    return '{"translations": [{"msgid": "...", ' + lang_fields + '}], "terms": {"Term": {' + term_fields + "}}}"
-
-
 def build_translation_prompt(
     entry: TranslationEntry,
     snippets_text: str,
@@ -163,12 +156,8 @@ def build_translation_prompt(
             "## Target Languages",
             ", ".join(target_languages),
             "",
-            "## Response Format",
-            "Return a JSON object with translations and any domain-specific terms you translated:",
-            _response_format_example(target_languages),
-            "",
-            "Include in terms: business terms, UI actions, DocType names, and technical terms"
-            " that should be translated consistently across the application.",
+            "In the terms field, include any business terms, UI actions, DocType names, and"
+            " technical terms you translated that should stay consistent across the application.",
         ]
     )
 
@@ -259,12 +248,8 @@ def build_batch_translation_prompt(
     lines.extend(
         [
             "",
-            "## Response Format",
-            "Return a JSON object with translations and any domain-specific terms you translated:",
-            _response_format_example(target_languages),
-            "",
-            "Include in terms: business terms, UI actions, DocType names, and technical terms"
-            " that should be translated consistently across the application.",
+            "In the terms field, include any business terms, UI actions, DocType names, and"
+            " technical terms you translated that should stay consistent across the application.",
         ]
     )
 
