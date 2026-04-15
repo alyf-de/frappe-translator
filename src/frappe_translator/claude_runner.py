@@ -37,7 +37,7 @@ class ClaudeRunner:
 
     async def _wait_for_backoff(self) -> None:
         """Wait if a global backoff is active (from a recent rate limit)."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         now = loop.time()
         if self._backoff_until > now:
             wait = self._backoff_until - now
@@ -48,7 +48,7 @@ class ClaudeRunner:
         """Set a global backoff after a rate limit hit."""
         async with self._backoff_lock:
             delay = _INITIAL_BACKOFF * (_BACKOFF_MULTIPLIER**retry)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             new_until = loop.time() + delay
             # Only extend, never shorten
             if new_until > self._backoff_until:

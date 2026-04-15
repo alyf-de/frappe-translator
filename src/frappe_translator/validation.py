@@ -8,7 +8,7 @@ import re
 # Patterns for placeholders that MUST be preserved exactly in translations
 PLACEHOLDER_PATTERNS = [
     re.compile(r"\{(\d+)\}"),  # {0}, {1}
-    re.compile(r"\{(\w+)\}"),  # {variable_name}
+    re.compile(r"\{([a-zA-Z_]\w*)\}"),  # {variable_name} (identifiers only, not {0})
     re.compile(r"%[sdifr%]"),  # %s, %d, %f, %i, %r, %%
     re.compile(r"\$\{[^}]+\}"),  # ${values.x}
     re.compile(r"<[^>]+>"),  # HTML tags
@@ -46,7 +46,7 @@ def validate_placeholders(original: str, translated: str) -> list[str]:
     return errors
 
 
-def parse_claude_json(raw: str) -> dict | list:
+def parse_claude_json(raw: str, _depth: int = 0) -> dict | list:
     """Parse JSON from claude CLI output, handling common wrapping patterns.
 
     Handles:
@@ -65,9 +65,9 @@ def parse_claude_json(raw: str) -> dict | list:
             # --json-schema responses put the parsed result in structured_output
             if "structured_output" in data and data["structured_output"] is not None:
                 return data["structured_output"]
-            # Regular responses put text in result
-            if "result" in data and isinstance(data["result"], str):
-                return parse_claude_json(data["result"])
+            # Regular responses put text in result (limit unwrap depth to prevent stack overflow)
+            if "result" in data and isinstance(data["result"], str) and _depth < 3:
+                return parse_claude_json(data["result"], _depth=_depth + 1)
         return data
     except json.JSONDecodeError:
         pass
@@ -97,25 +97,3 @@ def parse_claude_json(raw: str) -> dict | list:
                             break
 
     raise ValueError(f"Could not parse JSON from claude output: {raw[:200]}")
-
-
-def validate_translation_result(result: dict, expected_languages: list[str]) -> tuple[dict[str, str], dict[str, str]]:
-    """Validate a translation result dict against expected languages.
-
-    Returns:
-        (valid_translations, per_language_errors)
-    """
-    valid: dict[str, str] = {}
-    errors: dict[str, str] = {}
-
-    for lang in expected_languages:
-        if lang not in result:
-            errors[lang] = f"Missing language '{lang}' in response"
-        elif not isinstance(result[lang], str):
-            errors[lang] = f"Translation for '{lang}' is not a string: {type(result[lang])}"
-        elif not result[lang].strip():
-            errors[lang] = f"Empty translation for '{lang}'"
-        else:
-            valid[lang] = result[lang]
-
-    return valid, errors

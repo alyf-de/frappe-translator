@@ -6,6 +6,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from frappe_translator._io import atomic_json_write
 from frappe_translator.claude_runner import ClaudeRunner
 from frappe_translator.context_assembler import assemble_contexts
 from frappe_translator.discovery import discover_bench, get_target_languages, resolve_app_order
@@ -139,10 +140,8 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
                 glossary.terms[term] = translations
 
         # Persist glossary and extracted set
-        with open(glossary_path, "w") as f:
-            json.dump(glossary.terms, f, indent=2, ensure_ascii=False)
-        with open(extracted_path, "w") as f:
-            json.dump(sorted(extracted_msgids), f, ensure_ascii=False)
+        atomic_json_write(glossary_path, glossary.terms, indent=2)
+        atomic_json_write(extracted_path, sorted(extracted_msgids))
         logger.info("Glossary saved to %s (%d terms)", glossary_path, len(glossary.terms))
 
     # Process each app in dependency order (Pass 2 only)
@@ -163,8 +162,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
 
     # Save glossary with any new terms discovered during Pass 2
     if glossary.terms:
-        with open(glossary_path, "w") as f:
-            json.dump(glossary.terms, f, indent=2, ensure_ascii=False)
+        atomic_json_write(glossary_path, glossary.terms, indent=2)
         logger.info("Glossary updated: %d terms", len(glossary.terms))
 
     # Print summary

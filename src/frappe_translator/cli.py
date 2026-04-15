@@ -49,7 +49,9 @@ def main() -> None:
 @click.option("--dry-run", is_flag=True, help="Show what would be translated without running")
 @click.option("--skip-glossary", is_flag=True, help="Skip Pass 1 term extraction (single-pass mode)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+@click.pass_context
 def translate(
+    ctx: click.Context,
     bench_path: Path,
     config: Path | None,
     app: tuple[str, ...],
@@ -75,14 +77,23 @@ def translate(
         cfg.apps = list(app)
     if language:
         cfg.languages = list(language)
-    cfg.mode = mode
-    cfg.concurrency = concurrency
-    cfg.batch_size = batch_size
-    cfg.timeout = timeout
+
+    # Only override config-file values when the user explicitly passed the CLI flag
+    source = ctx.get_parameter_source
+    if source("mode") != click.core.ParameterSource.DEFAULT:
+        cfg.mode = mode
+    if source("concurrency") != click.core.ParameterSource.DEFAULT:
+        cfg.concurrency = concurrency
+    if source("batch_size") != click.core.ParameterSource.DEFAULT:
+        cfg.batch_size = batch_size
+    if source("timeout") != click.core.ParameterSource.DEFAULT:
+        cfg.timeout = timeout
     if model is not None:
         cfg.model = model
-    cfg.resume = resume
-    cfg.skip_glossary = skip_glossary
+    if source("resume") != click.core.ParameterSource.DEFAULT:
+        cfg.resume = resume
+    if source("skip_glossary") != click.core.ParameterSource.DEFAULT:
+        cfg.skip_glossary = skip_glossary
 
     # Check claude CLI is available
     if not dry_run:

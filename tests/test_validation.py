@@ -8,7 +8,6 @@ from frappe_translator.validation import (
     extract_placeholders,
     parse_claude_json,
     validate_placeholders,
-    validate_translation_result,
 )
 
 
@@ -94,31 +93,3 @@ class TestParseClaudeJson:
     def test_raises_on_empty_string(self) -> None:
         with pytest.raises(ValueError):
             parse_claude_json("")
-
-
-class TestValidateTranslationResult:
-    def test_separates_valid_from_errors(self) -> None:
-        result = {"de": "Hallo", "fr": "Bonjour"}
-        valid, errors = validate_translation_result(result, ["de", "fr"])
-        assert valid == {"de": "Hallo", "fr": "Bonjour"}
-        assert errors == {}
-
-    def test_missing_language_is_error(self) -> None:
-        result = {"de": "Hallo"}
-        valid, errors = validate_translation_result(result, ["de", "fr"])
-        assert "de" in valid
-        assert "fr" in errors
-        assert "Missing" in errors["fr"]
-
-    def test_non_string_translation_is_error(self) -> None:
-        result = {"de": 42}  # type: ignore[dict-item]
-        valid, errors = validate_translation_result(result, ["de"])
-        assert "de" not in valid
-        assert "de" in errors
-
-    def test_empty_translation_is_error(self) -> None:
-        result = {"de": "   "}
-        valid, errors = validate_translation_result(result, ["de"])
-        assert "de" not in valid
-        assert "de" in errors
-        assert "Empty" in errors["de"]

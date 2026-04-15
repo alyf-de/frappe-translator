@@ -6,6 +6,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from frappe_translator._io import atomic_json_write
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -15,9 +17,13 @@ PROGRESS_FILENAME = ".frappe-translator-progress.json"
 
 
 def _entry_key(msgid: str, msgctxt: str | None) -> str:
-    """Create a unique key for a translation entry."""
+    """Create a unique key for a translation entry.
+
+    Uses null byte as separator since it cannot appear in PO msgid/msgctxt strings,
+    avoiding collisions when msgid itself contains '::'.
+    """
     if msgctxt:
-        return f"{msgid}::{msgctxt}"
+        return f"{msgid}\x00{msgctxt}"
     return msgid
 
 
@@ -49,8 +55,7 @@ class ProgressTracker:
 
     def save(self) -> None:
         """Save progress to disk."""
-        with open(self._path, "w") as f:
-            json.dump(self._data, f, indent=2, ensure_ascii=False)
+        atomic_json_write(self._path, self._data, indent=2)
         self._dirty = False
 
     def clear(self) -> None:

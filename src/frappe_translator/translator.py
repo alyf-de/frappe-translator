@@ -145,10 +145,9 @@ async def translate_entries(
             await po_writer.flush_all()
             progress.save()
             if glossary is not None and glossary_path is not None and glossary.terms:
-                import json
+                from frappe_translator._io import atomic_json_write
 
-                with open(glossary_path, "w") as f:
-                    json.dump(glossary.terms, f, indent=2, ensure_ascii=False)
+                atomic_json_write(glossary_path, glossary.terms, indent=2)
             entries_since_checkpoint = 0
 
     # Retry failed entries individually using their pre-built prompts
@@ -216,7 +215,8 @@ def _build_batch_prompt(
     """Build a batch translation prompt from assembled contexts."""
     shared_glossary: dict[str, dict[str, str]] = {}
     for ctx in batch:
-        shared_glossary.update(ctx.glossary_terms)
+        for term, translations in ctx.glossary_terms.items():
+            shared_glossary.setdefault(term, {}).update(translations)
 
     entries_info: list[dict] = []
     for ctx in batch:
@@ -281,16 +281,17 @@ def _process_batch_result(
     if not isinstance(extracted_terms, dict):
         extracted_terms = {}
 
-    # Build lookup by msgid from the response array
-    response_by_msgid: dict[str, dict] = {}
+    # Build lookup by (msgid, msgctxt) from the response array
+    response_by_key: dict[tuple[str, str | None], dict] = {}
     for item in translations_list:
         if isinstance(item, dict) and "msgid" in item:
-            response_by_msgid[item["msgid"]] = item
+            key = (item["msgid"], item.get("msgctxt") or None)
+            response_by_key[key] = item
 
     results: list[TranslationResult] = []
     for ctx in batch:
         entry_langs = ctx.target_languages or target_languages
-        entry_data = response_by_msgid.get(ctx.entry.msgid)
+        entry_data = response_by_key.get((ctx.entry.msgid, ctx.entry.msgctxt))
         result = TranslationResult(msgid=ctx.entry.msgid, msgctxt=ctx.entry.msgctxt)
 
         if entry_data is None:
