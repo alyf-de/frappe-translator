@@ -124,7 +124,7 @@ async def translate_entries(
             total_translated += batch_ok
             total_errors += batch_err
             logger.info(
-                "Batch %d/%d done (%d/%d batches complete) — %d translated, %d errors, %d retries",
+                "Batch %d/%d done (%d/%d batches complete) — %d translated, %d errors, %d to retry",
                 batch_idx + 1,
                 len(batches),
                 batches_done,
