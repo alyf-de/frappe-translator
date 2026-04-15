@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def read_pot_entries(pot_path: Path) -> list[TranslationEntry]:
     """Read all entries from a POT file using polib."""
-    pot = polib.pofile(str(pot_path))
+    pot = polib.pofile(str(pot_path), wrapwidth=0)
     entries: list[TranslationEntry] = []
     for entry in pot:
         source_refs = [f"{loc[0]}:{loc[1]}" for loc in entry.occurrences]
@@ -36,7 +36,7 @@ def read_pot_entries(pot_path: Path) -> list[TranslationEntry]:
 
 def read_po_translations(po_path: Path) -> dict[tuple[str, str | None], str]:
     """Read existing translations from a PO file. Key is (msgid, msgctxt), value is msgstr."""
-    po = polib.pofile(str(po_path))
+    po = polib.pofile(str(po_path), wrapwidth=0)
     result: dict[tuple[str, str | None], str] = {}
     for entry in po:
         key = (entry.msgid, entry.msgctxt or None)
@@ -149,7 +149,7 @@ class POWriter:
     def _get_po(self, locale: str) -> tuple[polib.POFile, dict[tuple[str, str | None], polib.POEntry]]:
         """Get or lazily load the PO file and its entry index for a locale."""
         if locale not in self._po_files:
-            po = polib.pofile(str(self.po_paths[locale]))
+            po = polib.pofile(str(self.po_paths[locale]), wrapwidth=0)
             self._po_files[locale] = po
             self._entry_index[locale] = {(e.msgid, e.msgctxt or None): e for e in po}
         return self._po_files[locale], self._entry_index[locale]
