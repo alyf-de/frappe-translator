@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from frappe_translator.discovery import discover_bench, get_target_languages, resolve_app_order
+from frappe_translator.discovery import discover_bench, get_app_languages, get_target_languages, resolve_app_order
 from frappe_translator.models import AppInfo
 
 
@@ -84,3 +84,44 @@ class TestGetTargetLanguages:
         apps = discover_bench(tmp_bench)
         langs = get_target_languages(apps, None)
         assert langs == sorted(langs)
+
+    def test_union_across_uneven_apps(self, tmp_bench_uneven: Path) -> None:
+        apps = discover_bench(tmp_bench_uneven)
+        langs = get_target_languages(apps, None)
+        assert langs == ["de", "fr"]
+
+
+class TestGetAppLanguages:
+    def _make_app(self, name: str, locales: list[str]) -> AppInfo:
+        base = Path(f"/fake/{name}")
+        return AppInfo(
+            name=name,
+            path=base,
+            pot_path=base / "main.pot",
+            po_paths={loc: base / f"{loc}.po" for loc in locales},
+        )
+
+    def test_intersects_target_with_app_po_paths(self) -> None:
+        app = self._make_app("a", ["de", "fr"])
+        assert get_app_languages(app, ["de", "fr", "es"]) == ["de", "fr"]
+
+    def test_preserves_target_order(self) -> None:
+        app = self._make_app("a", ["de", "fr", "es"])
+        assert get_app_languages(app, ["fr", "de"]) == ["fr", "de"]
+
+    def test_returns_empty_when_no_overlap(self) -> None:
+        app = self._make_app("a", ["de"])
+        assert get_app_languages(app, ["fr", "es"]) == []
+
+    def test_returns_empty_when_app_has_no_po_paths(self) -> None:
+        app = self._make_app("a", [])
+        assert get_app_languages(app, ["de", "fr"]) == []
+
+    def test_returns_empty_when_target_list_empty(self) -> None:
+        app = self._make_app("a", ["de", "fr"])
+        assert get_app_languages(app, []) == []
+
+    def test_matches_per_app_coverage_on_real_bench(self, tmp_bench_uneven: Path) -> None:
+        apps = {a.name: a for a in discover_bench(tmp_bench_uneven)}
+        assert get_app_languages(apps["app_full"], ["de", "fr"]) == ["de", "fr"]
+        assert get_app_languages(apps["app_de_only"], ["de", "fr"]) == ["de"]

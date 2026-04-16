@@ -173,7 +173,12 @@ def _check_claude_cli() -> None:
 
 def _dry_run(cfg: TranslatorConfig) -> None:
     """Show what would be translated without running."""
-    from frappe_translator.discovery import discover_bench, get_target_languages, resolve_app_order
+    from frappe_translator.discovery import (
+        discover_bench,
+        get_app_languages,
+        get_target_languages,
+        resolve_app_order,
+    )
     from frappe_translator.po_handler import filter_entries, read_po_translations, read_pot_entries
 
     all_apps = discover_bench(cfg.bench_path)
@@ -194,23 +199,25 @@ def _dry_run(cfg: TranslatorConfig) -> None:
         entries = read_pot_entries(app.pot_path)
         non_plural = [e for e in entries if not e.is_plural]
 
-        if target_languages and app.po_paths:
-            first_locale = target_languages[0]
-            if first_locale in app.po_paths:
-                po_translations = read_po_translations(app.po_paths[first_locale])
-                filtered = filter_entries(non_plural, po_translations, cfg.mode)
-            else:
-                filtered = non_plural
+        app_languages = get_app_languages(app, target_languages)
+
+        if app_languages:
+            # Estimate by filtering against the first app-local locale; actual
+            # per-locale missing sets are resolved during the real run.
+            po_translations = read_po_translations(app.po_paths[app_languages[0]])
+            filtered = filter_entries(non_plural, po_translations, cfg.mode)
         else:
-            filtered = non_plural
+            filtered = []
 
         plural_count = len(entries) - len(non_plural)
+        locales_str = ", ".join(app_languages) if app_languages else "none"
         click.echo(
-            f"{app.name}: {len(filtered)} entries to process (of {len(entries)} total, {plural_count} plural skipped)"
+            f"{app.name}: {len(filtered)} entries x {len(app_languages)} locales [{locales_str}]"
+            f" (of {len(entries)} total, {plural_count} plural skipped)"
         )
         total_entries += len(filtered)
 
-    click.echo(f"\nTotal: {total_entries} entries x {len(target_languages)} languages")
+    click.echo(f"\nTotal: {total_entries} entries across {len(apps)} apps")
     estimated_batches = (total_entries + cfg.batch_size - 1) // cfg.batch_size
     if not cfg.skip_glossary:
         click.echo(f"Estimated claude calls: ~{estimated_batches} (Pass 1) + ~{estimated_batches} (Pass 2)")

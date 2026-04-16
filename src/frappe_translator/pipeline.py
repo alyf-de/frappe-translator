@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from frappe_translator._io import atomic_json_write
 from frappe_translator.claude_runner import ClaudeRunner
 from frappe_translator.context_assembler import assemble_contexts
-from frappe_translator.discovery import discover_bench, get_target_languages, resolve_app_order
+from frappe_translator.discovery import discover_bench, get_app_languages, get_target_languages, resolve_app_order
 from frappe_translator.models import TermGlossary, TranslationEntry
 from frappe_translator.po_handler import (
     POWriter,
@@ -184,6 +184,16 @@ async def _process_app(
     """Process a single app through the full pipeline."""
     result = AppResult(app_name=app.name)
 
+    # An app can only write translations for locales it already has a PO file for.
+    # Scope the target list down so we don't send Claude locales we'd just drop.
+    app_languages = get_app_languages(app, target_languages)
+    if not app_languages:
+        logger.info("%s: no PO files for requested locales; skipping", app.name)
+        return result
+    logger.info("%s: target locales (%d): %s", app.name, len(app_languages), app_languages)
+
+    app_style_config = {lang: style_config[lang] for lang in app_languages if lang in style_config}
+
     # Read POT entries (use cache from Pass 1 if available)
     entries = pot_cache.get(app.name) if pot_cache else None
     if entries is None:
@@ -202,42 +212,40 @@ async def _process_app(
     # Create POWriter early so filtering can reuse its loaded PO data
     po_writer = POWriter(app.po_paths)
 
-    # Filter entries based on run mode across ALL target locales
+    # Filter entries based on run mode across the app's locales
     # In fill-missing mode: include entry if ANY locale is missing it
     # In review-existing mode: include entry if ANY locale has it
     # In full-correct mode: include all entries
     # Also track per-entry missing languages for fill-missing (to avoid overwriting existing)
     missing_langs_per_entry: dict[tuple[str, str | None], set[str]] | None = None
-    if target_languages and app.po_paths and config.mode != "full-correct":
+    if config.mode != "full-correct":
         all_po_translations: dict[str, dict[tuple[str, str | None], str]] = {}
-        for lang in target_languages:
-            if lang in app.po_paths:
-                # Use POWriter's cached PO data to avoid double-parsing
-                _po, index = po_writer._get_po(lang)
-                all_po_translations[lang] = {k: e.msgstr for k, e in index.items()}
+        for lang in app_languages:
+            # Use POWriter's cached PO data to avoid double-parsing
+            _po, index = po_writer._get_po(lang)
+            all_po_translations[lang] = {k: e.msgstr for k, e in index.items()}
 
-        if all_po_translations:
-            filtered: list[TranslationEntry] = []
-            if config.mode == "fill-missing":
-                missing_langs_per_entry = {}
-                for entry in entries:
-                    key = (entry.msgid, entry.msgctxt)
-                    missing = {lang for lang, po in all_po_translations.items() if not po.get(key, "")}
-                    if missing:
-                        filtered.append(entry)
-                        missing_langs_per_entry[key] = missing
-            elif config.mode == "review-existing":
-                for entry in entries:
-                    key = (entry.msgid, entry.msgctxt)
-                    if any(po.get(key, "") for po in all_po_translations.values()):
-                        filtered.append(entry)
-            entries = filtered
+        filtered: list[TranslationEntry] = []
+        if config.mode == "fill-missing":
+            missing_langs_per_entry = {}
+            for entry in entries:
+                key = (entry.msgid, entry.msgctxt)
+                missing = {lang for lang, po in all_po_translations.items() if not po.get(key, "")}
+                if missing:
+                    filtered.append(entry)
+                    missing_langs_per_entry[key] = missing
+        elif config.mode == "review-existing":
+            for entry in entries:
+                key = (entry.msgid, entry.msgctxt)
+                if any(po.get(key, "") for po in all_po_translations.values()):
+                    filtered.append(entry)
+        entries = filtered
 
     # Filter by progress — skip fully-done entries (only in fill-missing mode)
     if config.resume and config.mode == "fill-missing":
         pending_entries = []
         for entry in entries:
-            pending_langs = progress.get_pending_languages(app.name, entry.msgid, entry.msgctxt, target_languages)
+            pending_langs = progress.get_pending_languages(app.name, entry.msgid, entry.msgctxt, app_languages)
             if pending_langs:
                 pending_entries.append(entry)
             else:
@@ -255,8 +263,8 @@ async def _process_app(
         entries=entries,
         app_path=app.path,
         glossary=glossary,
-        target_languages=target_languages,
-        style_config=style_config,
+        target_languages=app_languages,
+        style_config=app_style_config,
         per_entry_languages=missing_langs_per_entry,
     )
 
@@ -267,8 +275,8 @@ async def _process_app(
         po_writer=po_writer,
         progress=progress,
         app_name=app.name,
-        target_languages=target_languages,
-        style_config=style_config,
+        target_languages=app_languages,
+        style_config=app_style_config,
         glossary=glossary,
         glossary_path=glossary_path,
         checkpoint_interval=config.checkpoint_interval,

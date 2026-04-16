@@ -68,3 +68,14 @@ def get_target_languages(apps: list[AppInfo], language_filter: list[str] | None)
         found = found & set(language_filter)
 
     return sorted(found)
+
+
+def get_app_languages(app: AppInfo, target_languages: list[str]) -> list[str]:
+    """Return target_languages intersected with the app's po_paths, preserving input order.
+
+    An app can only write translations for locales it already has a PO file for.
+    Use this to scope a global target list down to what a single app can actually
+    produce before building prompts or invoking Claude.
+    """
+    app_locales = set(app.po_paths)
+    return [lang for lang in target_languages if lang in app_locales]

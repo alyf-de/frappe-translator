@@ -96,3 +96,41 @@ class TestClearProgress:
         runner = CliRunner()
         runner.invoke(main, ["clear-progress", str(tmp_bench)])
         assert not (tmp_bench / PROGRESS_FILENAME).exists()
+
+
+class TestDryRunPerAppLocales:
+    def test_shows_per_app_locale_set_on_uneven_bench(self, tmp_bench_uneven: Path) -> None:
+        runner = CliRunner()
+        result = runner.invoke(main, ["translate", str(tmp_bench_uneven), "--dry-run"])
+        assert result.exit_code == 0
+
+        output = result.output
+        # Global target languages are the union.
+        assert "Target languages (2): de, fr" in output
+
+        # Each app line should list only the locales it actually has PO files for.
+        app_full_line = next(line for line in output.splitlines() if line.startswith("app_full:"))
+        app_de_line = next(line for line in output.splitlines() if line.startswith("app_de_only:"))
+
+        assert "2 locales [de, fr]" in app_full_line
+        assert "1 locales [de]" in app_de_line
+        assert "fr" not in app_de_line
+
+    def test_skips_locales_that_no_app_can_write(self, tmp_bench_uneven: Path) -> None:
+        runner = CliRunner()
+        # Request a locale that no app supports alongside one that only app_full has.
+        result = runner.invoke(
+            main,
+            ["translate", str(tmp_bench_uneven), "--dry-run", "-l", "fr", "-l", "es"],
+        )
+        assert result.exit_code == 0
+
+        output = result.output
+        assert "Target languages (1): fr" in output
+
+        app_full_line = next(line for line in output.splitlines() if line.startswith("app_full:"))
+        app_de_line = next(line for line in output.splitlines() if line.startswith("app_de_only:"))
+
+        assert "1 locales [fr]" in app_full_line
+        # app_de_only has no fr.po, so it has no writable locales for this run.
+        assert "0 locales [none]" in app_de_line
