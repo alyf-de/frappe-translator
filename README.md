@@ -4,6 +4,8 @@ AI-powered translation CLI for Frappe apps using the Claude CLI.
 
 Massively parallelizes translation by assembling rich context (source code snippets, term glossaries, comments) and translating into all target languages simultaneously.
 
+With Claude Code Max, this can translate around 500 strings into 30 languages per 4-hour token limit.
+
 ## Requirements
 
 - Python 3.10+
