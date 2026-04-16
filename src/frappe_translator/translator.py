@@ -36,8 +36,11 @@ async def translate_entries(
 ) -> list[TranslationResult]:
     """Translate entries in batches using pre-assembled contexts.
 
-    Groups contexts into batches, sends one Claude call per batch, validates
-    results, and retries failed entries individually.
+    Contexts are grouped by their pending-language set so that each batch
+    prompt and JSON schema only request the locales that every entry in the
+    batch still needs. This avoids regenerating translations for locales that
+    are already complete (see issue #1).
+
     If glossary is provided, new terms from responses are merged into it.
     """
     results: list[TranslationResult] = []
@@ -45,23 +48,26 @@ async def translate_entries(
     if not contexts:
         return results
 
-    # Split into batches
-    batches: list[list[AssembledContext]] = []
-    for i in range(0, len(contexts), batch_size):
-        batches.append(contexts[i : i + batch_size])
+    # Group by identical pending-language sets, then split each group into
+    # fixed-size batches. Each batch carries its own language list.
+    groups = _group_contexts_by_languages(contexts, target_languages)
+    batches: list[tuple[list[AssembledContext], list[str]]] = []
+    for langs_key, group_contexts in groups.items():
+        langs_list = list(langs_key)
+        for i in range(0, len(group_contexts), batch_size):
+            batches.append((group_contexts[i : i + batch_size], langs_list))
 
     logger.info(
-        "Pass 2: Translating %d entries into %d languages in %d batches",
+        "Pass 2: Translating %d entries in %d batches across %d unique language sets",
         len(contexts),
-        len(target_languages),
         len(batches),
+        len(groups),
     )
 
-    # Build batch prompts and schemas, launch as async tasks
-    schema = build_translation_schema(target_languages)
-
-    async def _run_one(batch_idx: int, batch: list[AssembledContext]) -> tuple[int, str | None]:
-        prompt = _build_batch_prompt(batch, target_languages, style_config or {})
+    async def _run_one(batch_idx: int) -> tuple[int, str | None]:
+        batch, batch_langs = batches[batch_idx]
+        prompt = _build_batch_prompt(batch, batch_langs, style_config or {})
+        schema = build_translation_schema(batch_langs)
         try:
             raw = await runner.run(prompt, json_schema=schema)
         except Exception as e:
@@ -70,7 +76,7 @@ async def translate_entries(
         return batch_idx, raw
 
     # Launch all tasks — the runner's semaphore limits actual concurrency
-    pending = {asyncio.ensure_future(_run_one(i, b)): i for i, b in enumerate(batches)}
+    pending = {asyncio.ensure_future(_run_one(i)): i for i in range(len(batches))}
 
     entries_since_checkpoint = 0
     retry_contexts: list[AssembledContext] = []
@@ -82,11 +88,11 @@ async def translate_entries(
         done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             batch_idx, raw = task.result()
-            batch = batches[batch_idx]
+            batch, batch_langs = batches[batch_idx]
             del pending[task]
             batches_done += 1
 
-            batch_results, extracted_terms = _process_batch_result(batch, raw, target_languages)
+            batch_results, extracted_terms = _process_batch_result(batch, raw, batch_langs)
 
             # Merge extracted terms into glossary for subsequent batches
             if extracted_terms and glossary is not None:
@@ -155,8 +161,10 @@ async def translate_entries(
         logger.info("Retrying %d entries individually", len(retry_contexts))
 
         async def _retry_one(ctx: AssembledContext) -> tuple[AssembledContext, str | None]:
+            entry_langs = ctx.target_languages or target_languages
+            entry_schema = build_translation_schema(entry_langs)
             try:
-                raw = await runner.run(ctx.prompt, json_schema=schema)
+                raw = await runner.run(ctx.prompt, json_schema=entry_schema)
             except Exception as e:
                 logger.error("Retry failed for '%s': %s", ctx.entry.msgid[:50], e)
                 raw = None
@@ -205,6 +213,24 @@ async def translate_entries(
     )
 
     return results
+
+
+def _group_contexts_by_languages(
+    contexts: list[AssembledContext],
+    default_target_languages: list[str],
+) -> dict[tuple[str, ...], list[AssembledContext]]:
+    """Group assembled contexts by their pending-language set.
+
+    Contexts with identical target-language sets share a batch so every entry
+    in the resulting batch needs the same locales. Insertion order is
+    preserved both for groups (first-seen language set) and within each group.
+    """
+    groups: dict[tuple[str, ...], list[AssembledContext]] = {}
+    for ctx in contexts:
+        langs = ctx.target_languages or default_target_languages
+        key = tuple(sorted(langs))
+        groups.setdefault(key, []).append(ctx)
+    return groups
 
 
 def _build_batch_prompt(
