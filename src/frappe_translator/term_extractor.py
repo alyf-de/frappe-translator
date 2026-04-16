@@ -22,6 +22,10 @@ async def extract_terms(
 ) -> TermGlossary:
     """Extract key terms from entries in batches using claude CLI.
 
+    Entries are deduplicated by msgid before batching — the extraction prompt only
+    uses the source string, so repeated msgids across apps or contexts would
+    otherwise waste prompt tokens and batch capacity.
+
     Returns a TermGlossary with extracted terms (translations looked up separately).
     """
     glossary = TermGlossary()
@@ -29,12 +33,27 @@ async def extract_terms(
     if not entries:
         return glossary
 
-    # Split entries into batches
-    batches: list[list[TranslationEntry]] = []
-    for i in range(0, len(entries), batch_size):
-        batches.append(entries[i : i + batch_size])
+    # Deduplicate by msgid, preserving the first occurrence.
+    seen: set[str] = set()
+    unique_entries: list[TranslationEntry] = []
+    for entry in entries:
+        if entry.msgid in seen:
+            continue
+        seen.add(entry.msgid)
+        unique_entries.append(entry)
 
-    logger.info("Pass 1: Extracting terms from %d entries in %d batches", len(entries), len(batches))
+    duplicates = len(entries) - len(unique_entries)
+    if duplicates:
+        logger.info(
+            "Pass 1: deduplicated %d repeated msgids (%d -> %d unique entries)",
+            duplicates,
+            len(entries),
+            len(unique_entries),
+        )
+
+    batches: list[list[TranslationEntry]] = []
+    batches.extend(unique_entries[i : i + batch_size] for i in range(0, len(unique_entries), batch_size))
+    logger.info("Pass 1: Extracting terms from %d entries in %d batches", len(unique_entries), len(batches))
 
     # Build prompts for all batches
     prompts = [build_term_extraction_prompt(batch, i + 1) for i, batch in enumerate(batches)]
