@@ -315,6 +315,7 @@ def _process_batch_result(
             response_by_key[key] = item
 
     results: list[TranslationResult] = []
+    missed_keys: list[tuple[str, str | None]] = []
     for ctx in batch:
         entry_langs = ctx.target_languages or target_languages
         entry_data = response_by_key.get((ctx.entry.msgid, ctx.entry.msgctxt))
@@ -322,13 +323,54 @@ def _process_batch_result(
 
         if entry_data is None:
             result.skipped = True
+            missed_keys.append((ctx.entry.msgid, ctx.entry.msgctxt))
             results.append(result)
             continue
 
         _validate_entry_translations(result, entry_data, ctx.entry.msgid, entry_langs)
         results.append(result)
 
+    if missed_keys:
+        _log_batch_mismatch(batch, response_by_key, missed_keys, raw)
+
     return results, extracted_terms
+
+
+def _log_batch_mismatch(
+    batch: list[AssembledContext],
+    response_by_key: dict[tuple[str, str | None], dict],
+    missed_keys: list[tuple[str, str | None]],
+    raw: str,
+) -> None:
+    """Diagnostic logging for batch entries whose msgid/msgctxt didn't appear in the response.
+
+    Logs at DEBUG always; escalates to WARNING when the entire batch missed (a strong signal
+    that the response is structurally wrong rather than a per-entry omission).
+    """
+    expected_keys = {(ctx.entry.msgid, ctx.entry.msgctxt) for ctx in batch}
+    response_keys = set(response_by_key.keys())
+    extra_in_response = response_keys - expected_keys
+
+    all_missed = len(missed_keys) == len(batch)
+    log = logger.warning if all_missed else logger.debug
+
+    log(
+        "Batch response mismatch: %d/%d entries not found in response. "
+        "Expected %d keys, got %d keys, %d unexpected msgids in response.",
+        len(missed_keys),
+        len(batch),
+        len(expected_keys),
+        len(response_keys),
+        len(extra_in_response),
+    )
+
+    for msgid, msgctxt in missed_keys[:5]:
+        log("  missed: msgid=%r msgctxt=%r", msgid[:120], msgctxt)
+    for msgid, msgctxt in list(extra_in_response)[:5]:
+        log("  extra in response: msgid=%r msgctxt=%r", msgid[:120], msgctxt)
+
+    if all_missed:
+        log("  raw response (first 2000 chars): %s", raw[:2000])
 
 
 def _process_single_result(

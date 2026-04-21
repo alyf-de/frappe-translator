@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 from frappe_translator.models import TranslationEntry
-from frappe_translator.prompts import build_term_extraction_prompt, build_translation_prompt
+from frappe_translator.prompts import (
+    build_batch_translation_prompt,
+    build_term_extraction_prompt,
+    build_translation_prompt,
+    build_translation_schema,
+)
 
 
 def _entry(msgid: str, comments: list[str] | None = None) -> TranslationEntry:
@@ -113,3 +120,95 @@ class TestBuildTranslationPrompt:
             style_config={},
         )
         assert "Source Code Context" not in prompt
+
+    def test_includes_msgctxt_as_null_when_absent(self) -> None:
+        entry = _entry("Save")
+        prompt = build_translation_prompt(
+            entry=entry,
+            snippets_text="",
+            glossary_terms={},
+            target_languages=["de"],
+            style_config={},
+        )
+        assert "msgctxt: null" in prompt
+
+    def test_includes_msgctxt_value_when_present(self) -> None:
+        entry = TranslationEntry(msgid="Save", msgctxt="Button in form")
+        prompt = build_translation_prompt(
+            entry=entry,
+            snippets_text="",
+            glossary_terms={},
+            target_languages=["de"],
+            style_config={},
+        )
+        assert 'msgctxt: "Button in form"' in prompt
+
+
+class TestBuildTranslationSchema:
+    def test_msgctxt_is_required_and_nullable(self) -> None:
+        schema = json.loads(build_translation_schema(["de", "fr"]))
+        items = schema["properties"]["translations"]["items"]
+        assert "msgctxt" in items["required"]
+        assert items["properties"]["msgctxt"]["type"] == ["string", "null"]
+
+    def test_msgid_and_languages_required(self) -> None:
+        schema = json.loads(build_translation_schema(["de", "fr"]))
+        items = schema["properties"]["translations"]["items"]
+        assert set(items["required"]) == {"msgid", "msgctxt", "de", "fr"}
+
+
+class TestBuildBatchTranslationPrompt:
+    def _entry_info(self, msgid: str, msgctxt: str | None = None) -> dict:
+        return {
+            "msgid": msgid,
+            "msgctxt": msgctxt,
+            "comments": [],
+            "snippets_text": "",
+            "source_files": [],
+        }
+
+    def test_msgctxt_always_printed(self) -> None:
+        prompt = build_batch_translation_prompt(
+            entries=[
+                self._entry_info("Save"),
+                self._entry_info("Cancel", msgctxt="Button in dialog"),
+            ],
+            shared_glossary={},
+            target_languages=["de"],
+            style_config={},
+        )
+        assert "msgctxt: null" in prompt
+        assert 'msgctxt: "Button in dialog"' in prompt
+
+    def test_distinguishes_same_msgid_different_msgctxt(self) -> None:
+        prompt = build_batch_translation_prompt(
+            entries=[
+                self._entry_info("Discard", msgctxt="Button in web form"),
+                self._entry_info("Discard", msgctxt="Email discard action"),
+            ],
+            shared_glossary={},
+            target_languages=["de"],
+            style_config={},
+        )
+        assert prompt.count('msgid: "Discard"') == 2
+        assert 'msgctxt: "Button in web form"' in prompt
+        assert 'msgctxt: "Email discard action"' in prompt
+
+    def test_msgid_with_quotes_is_json_escaped(self) -> None:
+        prompt = build_batch_translation_prompt(
+            entries=[self._entry_info('Click "OK" to confirm')],
+            shared_glossary={},
+            target_languages=["de"],
+            style_config={},
+        )
+        assert r'msgid: "Click \"OK\" to confirm"' in prompt
+
+    def test_echo_instruction_present(self) -> None:
+        prompt = build_batch_translation_prompt(
+            entries=[self._entry_info("Save")],
+            shared_glossary={},
+            target_languages=["de"],
+            style_config={},
+        )
+        assert "echo" in prompt.lower()
+        assert "msgctxt" in prompt

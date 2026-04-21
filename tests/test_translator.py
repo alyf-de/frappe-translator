@@ -48,6 +48,9 @@ class RecordingRunner:
         return self.response_fn(prompt, json_schema)
 
 
+_NON_LANG_REQUIRED = {"msgid", "msgctxt"}
+
+
 def _default_response(prompt: str, schema: str | None) -> str:
     """Synthesize a response matching the schema and prompt.
 
@@ -56,9 +59,11 @@ def _default_response(prompt: str, schema: str | None) -> str:
     """
     schema_dict = json.loads(schema or "{}")
     required = schema_dict["properties"]["translations"]["items"]["required"]
-    langs = [field for field in required if field != "msgid"]
+    langs = [field for field in required if field not in _NON_LANG_REQUIRED]
     msgids = re.findall(r'msgid:\s*"([^"]+)"', prompt)
-    translations = [{"msgid": msgid, **{lang: f"{msgid}::{lang}" for lang in langs}} for msgid in msgids]
+    translations = [
+        {"msgid": msgid, "msgctxt": None, **{lang: f"{msgid}::{lang}" for lang in langs}} for msgid in msgids
+    ]
     return json.dumps({"translations": translations})
 
 
@@ -92,7 +97,7 @@ def _schema_langs(schema: str | None) -> tuple[str, ...]:
     """Extract the sorted tuple of required languages from a translation schema."""
     data = json.loads(schema or "{}")
     required = data["properties"]["translations"]["items"]["required"]
-    return tuple(sorted(field for field in required if field != "msgid"))
+    return tuple(sorted(field for field in required if field not in _NON_LANG_REQUIRED))
 
 
 def _prompt_target_languages(prompt: str) -> list[str]:

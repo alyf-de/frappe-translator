@@ -13,11 +13,19 @@ def build_translation_schema(target_languages: list[str]) -> str:
     """Build a JSON Schema for the translation response.
 
     Returns a schema for an object with:
-    - translations: array of objects, each with msgid + language translations
+    - translations: array of objects, each with msgid + msgctxt + language translations
     - terms: object mapping term -> {locale: translation} for glossary enrichment
+
+    ``msgctxt`` is required and nullable so the model is forced to echo it back
+    verbatim. Two entries can share the same ``msgid`` but differ on ``msgctxt``;
+    without ``msgctxt`` in the response we cannot match translations back to
+    their source entries.
     """
-    translation_props: dict[str, Any] = {"msgid": {"type": "string"}}
-    required = ["msgid"]
+    translation_props: dict[str, Any] = {
+        "msgid": {"type": "string"},
+        "msgctxt": {"type": ["string", "null"]},
+    }
+    required = ["msgid", "msgctxt"]
     for lang in target_languages:
         translation_props[lang] = {"type": "string"}
         required.append(lang)
@@ -95,11 +103,9 @@ def build_translation_prompt(
         "Translate the following UI string into the target languages listed below.",
         "",
         "## Source String",
-        f'msgid: "{entry.msgid}"',
+        f"msgid: {json.dumps(entry.msgid, ensure_ascii=False)}",
+        f"msgctxt: {json.dumps(entry.msgctxt or None, ensure_ascii=False)}",
     ]
-
-    if entry.msgctxt:
-        lines.append(f'context: "{entry.msgctxt}"')
 
     if entry.comments:
         lines.append(f"Comments: {chr(10).join(entry.comments)}")
@@ -152,6 +158,8 @@ def build_translation_prompt(
             "3. Preserve Markdown formatting",
             "4. Do not translate technical identifiers (DocType names used as identifiers)",
             "5. Match the tone and register of the original (error messages stay direct, help text stays friendly)",
+            "6. In your response, echo `msgid` AND `msgctxt` verbatim (use null for `msgctxt` when the"
+            " input shows it as null) — these together identify the source entry.",
             "",
             "## Target Languages",
             ", ".join(target_languages),
@@ -190,6 +198,9 @@ def build_batch_translation_prompt(
         "3. Preserve Markdown formatting",
         "4. Do not translate technical identifiers (DocType names used as identifiers)",
         "5. Match the tone and register of the original (error messages stay direct, help text stays friendly)",
+        "6. In your response, echo each entry's `msgid` AND `msgctxt` verbatim — these together identify"
+        " the entry. Two entries can share the same msgid with different msgctxt and need separate"
+        " translations. Use null for `msgctxt` when the input shows it as null.",
     ]
 
     if shared_glossary:
@@ -230,12 +241,11 @@ def build_batch_translation_prompt(
 
     for i, entry_info in enumerate(entries):
         msgid = entry_info["msgid"]
+        msgctxt = entry_info.get("msgctxt") or None
         lines.append("")
         lines.append(f"### String {i + 1}")
-        lines.append(f'msgid: "{msgid}"')
-
-        if entry_info.get("msgctxt"):
-            lines.append(f'context: "{entry_info["msgctxt"]}"')
+        lines.append(f"msgid: {json.dumps(msgid, ensure_ascii=False)}")
+        lines.append(f"msgctxt: {json.dumps(msgctxt, ensure_ascii=False)}")
 
         if entry_info.get("comments"):
             lines.append(f"Comments: {chr(10).join(entry_info['comments'])}")
