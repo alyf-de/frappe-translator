@@ -221,9 +221,7 @@ async def _process_app(
     if config.mode != "full-correct":
         all_po_translations: dict[str, dict[tuple[str, str | None], str]] = {}
         for lang in app_languages:
-            # Use POWriter's cached PO data to avoid double-parsing
-            _po, index = po_writer._get_po(lang)
-            all_po_translations[lang] = {k: e.msgstr for k, e in index.items()}
+            all_po_translations[lang] = po_writer.get_translations(lang)
 
         filtered: list[TranslationEntry] = []
         if config.mode == "fill-missing":
