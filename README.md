@@ -132,6 +132,10 @@ priority = ["frappe", "erpnext", "hrms"]
 
 Pass it with `--config frappe-translator.toml`.
 
+## Scheduled runs
+
+To run the tool every night on a server and open pull requests automatically, see [docs/scheduled-runs.md](docs/scheduled-runs.md).
+
 ## Development
 
 ```bash
