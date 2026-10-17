@@ -67,6 +67,22 @@ exclude_languages = ["eo"]
 frappe-translator translate /path/to/bench --skip-glossary
 ```
 
+### Build the glossary
+
+Translate the terms in the glossary files with a stronger model:
+
+```bash
+frappe-translator glossary /path/to/bench --model sonnet
+```
+
+Add `--seed` to also add all DocType names and a short list of core Frappe terms (for example "Submit", "Opening", "Party") first. Use Opus for this one-time seed:
+
+```bash
+frappe-translator glossary /path/to/bench --model opus --seed
+```
+
+The command runs Pass 1 first. `--app`, `--language` and `--exclude-language` work as for `translate`. See [Glossary](#glossary).
+
 ### Check translation coverage
 
 ```bash
@@ -114,6 +130,10 @@ Each app has an optional glossary file `<glossary_dir>/<app>.json`. The default 
 ```
 
 `source` is `manual`, `opus` or `sonnet`. A term with `{}` was extracted, but has no curated translation yet.
+
+The `glossary` command fills the term and language pairs of each app file. It sends the term, up to 3 source strings that contain it and the existing PO translations as hints. It writes the results with `source` set to the model tier (`sonnet` or `opus`). A run writes a pair only if it has no entry or a lower source: `manual` > `opus` > `sonnet`. So a Sonnet run fills gaps, an Opus run also replaces Sonnet entries, and no run changes `manual` entries. The file is saved after each batch, so an interrupted run continues where it stopped.
+
+Glossary entries win over existing PO translations. Strings that were translated before keep their old term until they are translated again.
 
 To translate app X, the tool merges the files of the apps in `[apps.order] priority` (if they are in the bench) and then the file of X. For each term and language, the later app wins. Files of other apps are not used. Then:
 
