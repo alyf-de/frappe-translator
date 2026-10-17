@@ -154,6 +154,12 @@ Run `crontab -e` and add:
 
 `flock` prevents a new run from starting while the previous one is still active.
 
+To fill the glossary with Sonnet once a month, add a second line. It runs one hour before the nightly job and uses the same lock, so the nightly job skips that night if the glossary run takes longer. Use one bench, because all benches share `glossary_dir`. Commit the changed glossary files to their git repository after the run.
+
+```cron
+0 0 1 * * flock /tmp/translate.lock bash -c 'source ~/.translate.env && ~/.local/bin/frappe-translator glossary ~/translate/develop --model sonnet --config ~/translate/frappe-translator.toml' >> ~/translate/glossary.log 2>&1
+```
+
 ## First run
 
 Run the script manually once and watch the memory use:

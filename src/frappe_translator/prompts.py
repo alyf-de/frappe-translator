@@ -245,3 +245,58 @@ def build_batch_translation_prompt(
             lines.append(f"Source: {', '.join(entry_info['source_files'])}")
 
     return "\n".join(lines)
+
+
+def build_glossary_schema(todo: dict[str, list[str]]) -> str:
+    """JSON Schema for {"terms": {term: {lang: text}}}, with the languages each term needs."""
+    term_props = {
+        term: {
+            "type": "object",
+            "properties": {lang: {"type": "string"} for lang in langs},
+            "required": langs,
+        }
+        for term, langs in todo.items()
+    }
+    schema = {
+        "type": "object",
+        "properties": {"terms": {"type": "object", "properties": term_props, "required": list(todo)}},
+        "required": ["terms"],
+    }
+    return json.dumps(schema)
+
+
+def build_glossary_prompt(items: list[dict[str, Any]]) -> str:
+    """Build a prompt for translating glossary terms.
+
+    Args:
+        items: List of dicts with keys: term, languages, examples (source strings that
+               contain the term), hints ({lang: existing PO translation}).
+    """
+    lines: list[str] = [
+        "You are a terminology expert for a business application (Frappe/ERPNext).",
+        "",
+        "Translate each glossary term into the languages listed for it. All later translations of the"
+        " application's UI strings will use these term translations, so choose the standard term that"
+        " native users of business software expect.",
+        "",
+        "## Rules",
+        "1. Translate the term in the meaning it has in the example strings (an ERP/accounting meaning"
+        " where it applies).",
+        "2. Existing translations come from the current PO files. Keep them if they are correct, replace"
+        " them if they are wrong or unusual.",
+        "3. Return only the translated term: no explanations, no alternatives, no quotes.",
+        "4. Use the capitalization that is normal for a UI label in the target language.",
+        "",
+        "## Terms",
+    ]
+    for i, item in enumerate(items):
+        lines.append("")
+        lines.append(f"### Term {i + 1}")
+        lines.append(f"term: {json.dumps(item['term'], ensure_ascii=False)}")
+        lines.append(f"languages: {', '.join(item['languages'])}")
+        if item["examples"]:
+            lines.append("used in:")
+            lines.extend(f"- {json.dumps(example, ensure_ascii=False)}" for example in item["examples"])
+        if item["hints"]:
+            lines.append(f"existing translations: {json.dumps(item['hints'], ensure_ascii=False)}")
+    return "\n".join(lines)

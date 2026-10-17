@@ -27,6 +27,29 @@ logger = logging.getLogger(__name__)
 # {term: {lang: {"text": ..., "source": "manual" | "opus" | "sonnet"}}}
 GlossaryFile = dict[str, dict[str, dict[str, str]]]
 
+# A run may only write a (term, lang) pair whose current source ranks lower than its own.
+SOURCE_RANK = {"sonnet": 1, "opus": 2, "manual": 3}
+
+# Seeded into the first app's file (frappe) by `glossary --seed`.
+CORE_TERMS = [
+    "Submit",
+    "Cancel",
+    "Amend",
+    "Draft",
+    "Submitted",
+    "Cancelled",
+    "Opening",
+    "Party",
+    "Workspace",
+    "Report",
+    "DocType",
+    "Workflow",
+    "Role",
+    "Permission",
+    "Naming Series",
+    "Print Format",
+]
+
 
 def load_glossary_file(glossary_dir: Path, app: str) -> GlossaryFile:
     path = glossary_dir / f"{app}.json"
@@ -54,6 +77,32 @@ def merge_chain(files: dict[str, GlossaryFile], chain: list[str]) -> dict[str, d
             for lang, entry in langs.items():
                 merged_langs[lang] = entry["text"]
     return merged
+
+
+def doctype_names(app: AppInfo) -> list[str]:
+    """Names of the DocTypes defined in ``app`` (``<app>/<module>/doctype/<name>/<name>.json``)."""
+    names = []
+    for path in sorted((app.path / app.name).glob("*/doctype/*/*.json")):
+        data = json.loads(path.read_text())
+        # Other JSON files can live next to a DocType, e.g. test records as a list
+        if isinstance(data, dict) and data.get("doctype") == "DocType":
+            names.append(data["name"])
+    return names
+
+
+def seed_glossary(files: dict[str, GlossaryFile], apps: list[AppInfo], first_app: str, priority: list[str]) -> None:
+    """Add CORE_TERMS to ``first_app`` and DocType names to the file of each app in ``apps``, as {}.
+
+    A DocType name already in the app's chain is not added again. Existing entries are kept.
+    """
+    for term in CORE_TERMS:
+        files[first_app].setdefault(term, {})
+    app_names = set(files)
+    for app in apps:
+        chain = app_chain(app.name, app_names, priority)
+        for name in doctype_names(app):
+            if not any(name in files[a] for a in chain):
+                files[app.name][name] = {}
 
 
 def migrate_bench_glossary(bench_path: Path, glossary_dir: Path, apps: list[AppInfo], priority: list[str]) -> None:

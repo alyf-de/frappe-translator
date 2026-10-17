@@ -129,6 +129,83 @@ def translate(
 
 @main.command()
 @click.argument("bench_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--model", required=True, help="Claude model: sonnet or opus. Sets the source of written entries.")
+@click.option("--seed", is_flag=True, help="Add DocType names and core Frappe terms to the glossary files first")
+@click.option("--config", "-c", type=click.Path(exists=True, path_type=Path), default=None, help="Config TOML file")
+@click.option("--app", "-a", multiple=True, help="App to build the glossary for (repeatable, default: all)")
+@click.option("--language", "-l", multiple=True, help="Target language (repeatable, default: all found)")
+@click.option("--exclude-language", "-x", multiple=True, help="Language to skip (repeatable, e.g. eo)")
+@click.option(
+    "--glossary-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Folder with per-app glossary files (default: <bench>/glossaries)",
+)
+@click.option("--concurrency", type=click.IntRange(1, 50), default=5, help="Max parallel claude processes")
+@click.option("--batch-size", type=int, default=50, help="Terms per batch")
+@click.option("--timeout", type=int, default=120, help="Timeout per claude call in seconds")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+@click.pass_context
+def glossary(
+    ctx: click.Context,
+    bench_path: Path,
+    model: str,
+    seed: bool,
+    config: Path | None,
+    app: tuple[str, ...],
+    language: tuple[str, ...],
+    exclude_language: tuple[str, ...],
+    glossary_dir: Path | None,
+    concurrency: int,
+    batch_size: int,
+    timeout: int,
+    verbose: bool,
+) -> None:
+    """Translate the terms in the glossary files with Claude."""
+    model_name = model.lower()
+    if "opus" in model_name:
+        tier = "opus"
+    elif "sonnet" in model_name:
+        tier = "sonnet"
+    else:
+        raise click.UsageError(f"--model must be a sonnet or opus model, got {model!r}")
+
+    _setup_logging(verbose)
+
+    from frappe_translator.config import load_config
+
+    cfg = load_config(config)
+    cfg.bench_path = bench_path
+    cfg.model = model
+    if app:
+        cfg.apps = list(app)
+    if language:
+        cfg.languages = list(language)
+    if exclude_language:
+        cfg.exclude_languages = list(exclude_language)
+    if glossary_dir is not None:
+        cfg.glossary_dir = glossary_dir
+    source = ctx.get_parameter_source
+    if source("concurrency") != click.core.ParameterSource.DEFAULT:
+        cfg.concurrency = concurrency
+    if source("batch_size") != click.core.ParameterSource.DEFAULT:
+        cfg.batch_size = batch_size
+    if source("timeout") != click.core.ParameterSource.DEFAULT:
+        cfg.timeout = timeout
+
+    _check_claude_cli()
+
+    from frappe_translator.pipeline import run_glossary
+
+    try:
+        asyncio.run(run_glossary(cfg, tier, seed))
+    except KeyboardInterrupt:
+        click.echo("\nInterrupted. The glossary files are saved after each batch.", err=True)
+        sys.exit(130)
+
+
+@main.command()
+@click.argument("bench_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--app", "-a", multiple=True, help="App to check (repeatable, default: all)")
 def status(bench_path: Path, app: tuple[str, ...]) -> None:
     """Show translation coverage statistics."""

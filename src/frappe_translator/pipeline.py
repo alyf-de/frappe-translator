@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
+from itertools import islice
 from typing import TYPE_CHECKING
 
 from frappe_translator._io import atomic_json_write
@@ -11,11 +14,14 @@ from frappe_translator.claude_runner import ClaudeRunner
 from frappe_translator.context_assembler import assemble_contexts
 from frappe_translator.discovery import discover_bench, get_app_languages, get_target_languages, resolve_app_order
 from frappe_translator.glossary import (
+    SOURCE_RANK,
+    GlossaryFile,
     app_chain,
     load_glossary_file,
     merge_chain,
     migrate_bench_glossary,
     save_glossary_file,
+    seed_glossary,
 )
 from frappe_translator.models import TermGlossary, TranslationEntry
 from frappe_translator.po_handler import (
@@ -24,8 +30,10 @@ from frappe_translator.po_handler import (
     read_pot_entries,
 )
 from frappe_translator.progress import ProgressTracker
+from frappe_translator.prompts import build_glossary_prompt, build_glossary_schema
 from frappe_translator.term_extractor import extract_terms
 from frappe_translator.translator import translate_entries
+from frappe_translator.validation import parse_claude_json
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -96,36 +104,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
 
     # Pass 1: extract terms per app; new terms go into that app's glossary file as {}
     if not config.skip_glossary:
-        extracted_path = bench_path / "glossary_extracted.json"
-        cache = json.loads(extracted_path.read_text()) if extracted_path.exists() else {}
-        # The cache only says which msgids have their terms in *this* glossary_dir.
-        if cache and cache["glossary_dir"] != str(glossary_dir.resolve()):
-            logger.info("glossary_dir changed from %s, extracting terms again", cache["glossary_dir"])
-            cache = {}
-        extracted: dict[str, list[str]] = cache.get("apps", {})
-
-        for app in apps:
-            # Cache POT entries so _process_app doesn't re-parse them.
-            entries = read_pot_entries(app.pot_path)
-            pot_cache[app.name] = entries
-            done = set(extracted.get(app.name, []))
-            non_plural = [e for e in entries if not e.is_plural]
-            uncovered = [e for e in non_plural if e.msgid not in done]
-            logger.info("Pass 1 %s: %d/%d entries need term extraction", app.name, len(uncovered), len(non_plural))
-            if not uncovered:
-                continue
-
-            extracted_terms = await extract_terms(uncovered, runner, config.batch_size)
-            chain = app_chain(app.name, app_names, config.app_priority)
-            new_terms = [t for t in extracted_terms.terms if not any(t in files[a] for a in chain)]
-            if new_terms:
-                for term in new_terms:
-                    files[app.name][term] = {}
-                save_glossary_file(glossary_dir, app.name, files[app.name])
-                logger.info("%s: added %d new terms to %s", app.name, len(new_terms), glossary_dir)
-
-            extracted[app.name] = sorted(done | {e.msgid for e in uncovered})
-            atomic_json_write(extracted_path, {"glossary_dir": str(glossary_dir.resolve()), "apps": extracted})
+        await extract_new_terms(config, apps, files, runner, pot_cache)
 
     # Runtime glossary per app: merged chain files, then PO lookups fill gaps, then [terminology] wins.
     # PO lookups are not written back; they are recomputed each run.
@@ -162,6 +141,168 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     # Print summary
     summary.log_summary()
     return summary
+
+
+async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) -> None:
+    """Translate the terms of each app's glossary file and write them with ``source`` = ``tier``.
+
+    A (term, lang) pair is written only if it has no entry or its source ranks lower than ``tier``.
+    """
+    all_apps = discover_bench(config.bench_path)
+    if not all_apps:
+        logger.error("No apps with POT files found in %s", config.bench_path)
+        return
+    all_apps_ordered = resolve_app_order(all_apps, config.app_priority)
+    apps = [a for a in all_apps_ordered if a.name in config.apps] if config.apps else all_apps_ordered
+    target_languages = get_target_languages(apps, config.languages or None, config.exclude_languages)
+    runner = ClaudeRunner(concurrency=config.concurrency, model=config.model, timeout=config.timeout)
+
+    glossary_dir = config.get_glossary_dir()
+    migrate_bench_glossary(config.bench_path, glossary_dir, all_apps_ordered, config.app_priority)
+    files = {app.name: load_glossary_file(glossary_dir, app.name) for app in all_apps_ordered}
+
+    if seed:
+        first_app = all_apps_ordered[0].name
+        seed_glossary(files, apps, first_app, config.app_priority)
+        for name in {first_app, *(app.name for app in apps)}:
+            if files[name]:
+                save_glossary_file(glossary_dir, name, files[name])
+
+    pot_cache: dict[str, list[TranslationEntry]] = {}
+    await extract_new_terms(config, apps, files, runner, pot_cache)
+
+    all_terms = sorted({term for app in apps for term in files[app.name]})
+    po_hints = lookup_terms_batch(all_terms, {app.name: app.po_paths for app in all_apps_ordered})
+    for app in apps:
+        await _translate_glossary_terms(
+            app,
+            files[app.name],
+            get_app_languages(app, target_languages),
+            tier,
+            pot_cache[app.name],
+            po_hints,
+            runner,
+            config,
+        )
+
+
+async def _translate_glossary_terms(
+    app: AppInfo,
+    terms: GlossaryFile,
+    langs: list[str],
+    tier: str,
+    entries: list[TranslationEntry],
+    po_hints: dict[str, dict[str, str]],
+    runner: ClaudeRunner,
+    config: TranslatorConfig,
+) -> None:
+    """Translate the open pairs of one app's glossary file; save the file after each batch."""
+    rank = SOURCE_RANK[tier]
+    todo: dict[str, list[str]] = {}
+    for term, translations in terms.items():
+        missing = [
+            lang for lang in langs if lang not in translations or SOURCE_RANK[translations[lang]["source"]] < rank
+        ]
+        if missing:
+            todo[term] = missing
+    logger.info("Glossary %s: %d terms to translate", app.name, len(todo))
+    if not todo:
+        return
+
+    msgids = [entry.msgid for entry in entries]
+    todo_items = list(todo.items())
+    batches = [dict(todo_items[i : i + config.batch_size]) for i in range(0, len(todo_items), config.batch_size)]
+
+    async def run_one(batch: dict[str, list[str]]) -> tuple[dict[str, list[str]], str | None]:
+        items = []
+        for term, missing in batch.items():
+            pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
+            examples = list(islice((m for m in msgids if pattern.search(m)), 3))
+            hints = {lang: text for lang, text in po_hints[term].items() if lang in missing}
+            items.append({"term": term, "languages": missing, "examples": examples, "hints": hints})
+        try:
+            raw = await runner.run(build_glossary_prompt(items), json_schema=build_glossary_schema(batch))
+        except Exception as e:
+            logger.error("Glossary %s: batch failed: %s", app.name, e)
+            raw = None
+        return batch, raw
+
+    glossary_dir = config.get_glossary_dir()
+    for next_done in asyncio.as_completed([run_one(batch) for batch in batches]):
+        batch, raw = await next_done
+        if raw is None:
+            continue
+        try:
+            data = parse_claude_json(raw)
+            if not isinstance(data, dict):
+                raise ValueError(f"expected an object, got {type(data).__name__}")
+            result = data["terms"]
+            if not isinstance(result, dict):
+                raise ValueError(f"expected an object for terms, got {type(result).__name__}")
+        except (ValueError, KeyError) as e:
+            logger.warning("Glossary %s: failed to parse response: %s", app.name, e)
+            continue
+        written = 0
+        for term, texts in result.items():
+            if term not in batch or not isinstance(texts, dict):
+                logger.warning("Glossary %s: skipping %r: %r", app.name, term, texts)
+                continue
+            for lang, text in texts.items():
+                text = text.strip() if isinstance(text, str) else ""
+                if lang not in batch[term] or not text:
+                    logger.warning("Glossary %s: skipping %r / %s: %r", app.name, term, lang, text)
+                    continue
+                terms[term][lang] = {"text": text, "source": tier}
+                written += 1
+        save_glossary_file(glossary_dir, app.name, terms)
+        logger.info("Glossary %s: wrote %d translations", app.name, written)
+
+
+async def extract_new_terms(
+    config: TranslatorConfig,
+    apps: list[AppInfo],
+    files: dict[str, GlossaryFile],
+    runner: ClaudeRunner,
+    pot_cache: dict[str, list[TranslationEntry]],
+) -> None:
+    """Pass 1: add newly extracted terms to each app's glossary file as {}.
+
+    ``files`` holds the glossary files of all apps; it is updated in place.
+    ``pot_cache`` receives the POT entries of ``apps``.
+    """
+    bench_path = config.bench_path
+    glossary_dir = config.get_glossary_dir()
+    app_names = set(files)
+    extracted_path = bench_path / "glossary_extracted.json"
+    cache = json.loads(extracted_path.read_text()) if extracted_path.exists() else {}
+    # The cache only says which msgids have their terms in *this* glossary_dir.
+    if cache and cache["glossary_dir"] != str(glossary_dir.resolve()):
+        logger.info("glossary_dir changed from %s, extracting terms again", cache["glossary_dir"])
+        cache = {}
+    extracted: dict[str, list[str]] = cache.get("apps", {})
+
+    for app in apps:
+        # Cache POT entries so _process_app doesn't re-parse them.
+        entries = read_pot_entries(app.pot_path)
+        pot_cache[app.name] = entries
+        done = set(extracted.get(app.name, []))
+        non_plural = [e for e in entries if not e.is_plural]
+        uncovered = [e for e in non_plural if e.msgid not in done]
+        logger.info("Pass 1 %s: %d/%d entries need term extraction", app.name, len(uncovered), len(non_plural))
+        if not uncovered:
+            continue
+
+        extracted_terms = await extract_terms(uncovered, runner, config.batch_size)
+        chain = app_chain(app.name, app_names, config.app_priority)
+        new_terms = [t for t in extracted_terms.terms if not any(t in files[a] for a in chain)]
+        if new_terms:
+            for term in new_terms:
+                files[app.name][term] = {}
+            save_glossary_file(glossary_dir, app.name, files[app.name])
+            logger.info("%s: added %d new terms to %s", app.name, len(new_terms), glossary_dir)
+
+        extracted[app.name] = sorted(done | {e.msgid for e in uncovered})
+        atomic_json_write(extracted_path, {"glossary_dir": str(glossary_dir.resolve()), "apps": extracted})
 
 
 async def _process_app(
