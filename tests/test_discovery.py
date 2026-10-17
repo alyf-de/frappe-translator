@@ -80,6 +80,11 @@ class TestGetTargetLanguages:
         langs = get_target_languages(apps, ["es"])
         assert langs == []
 
+    def test_exclude_removes_langs(self, tmp_bench: Path) -> None:
+        apps = discover_bench(tmp_bench)
+        langs = get_target_languages(apps, None, ["fr"])
+        assert langs == ["de"]
+
     def test_returns_sorted(self, tmp_bench: Path) -> None:
         apps = discover_bench(tmp_bench)
         langs = get_target_languages(apps, None)

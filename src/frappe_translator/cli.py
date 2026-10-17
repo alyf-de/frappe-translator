@@ -35,6 +35,7 @@ def main() -> None:
 @click.option("--config", "-c", type=click.Path(exists=True, path_type=Path), default=None, help="Config TOML file")
 @click.option("--app", "-a", multiple=True, help="App to translate (repeatable, default: all)")
 @click.option("--language", "-l", multiple=True, help="Target language (repeatable, default: all found)")
+@click.option("--exclude-language", "-x", multiple=True, help="Language to skip (repeatable, e.g. eo)")
 @click.option(
     "--mode",
     type=click.Choice(["fill-missing", "review-existing", "full-correct"]),
@@ -56,6 +57,7 @@ def translate(
     config: Path | None,
     app: tuple[str, ...],
     language: tuple[str, ...],
+    exclude_language: tuple[str, ...],
     mode: str,
     concurrency: int,
     batch_size: int,
@@ -77,6 +79,8 @@ def translate(
         cfg.apps = list(app)
     if language:
         cfg.languages = list(language)
+    if exclude_language:
+        cfg.exclude_languages = list(exclude_language)
 
     # Only override config-file values when the user explicitly passed the CLI flag
     source = ctx.get_parameter_source
@@ -186,7 +190,7 @@ def _dry_run(cfg: TranslatorConfig) -> None:
         all_apps = [a for a in all_apps if a.name in cfg.apps]
     apps = resolve_app_order(all_apps, cfg.app_priority)
 
-    target_languages = get_target_languages(apps, cfg.languages or None)
+    target_languages = get_target_languages(apps, cfg.languages or None, cfg.exclude_languages)
 
     click.echo(f"Mode: {cfg.mode}")
     click.echo(f"Target languages ({len(target_languages)}): {', '.join(target_languages)}")

@@ -36,6 +36,7 @@ class TranslatorConfig:
     skip_glossary: bool = False
     apps: list[str] = field(default_factory=list)
     languages: list[str] = field(default_factory=list)
+    exclude_languages: list[str] = field(default_factory=list)
     app_priority: list[str] = field(default_factory=lambda: ["frappe", "erpnext", "hrms"])
     style_default: StyleConfig = field(default_factory=StyleConfig)
     style_per_language: dict[str, StyleConfig] = field(default_factory=dict)
@@ -72,6 +73,7 @@ def load_config(path: Path | None) -> TranslatorConfig:
     config.skip_glossary = run.get("skip_glossary", config.skip_glossary)
     config.apps = run.get("apps", config.apps)
     config.languages = run.get("languages", config.languages)
+    config.exclude_languages = run.get("exclude_languages", config.exclude_languages)
 
     apps_section = data.get("apps", {})
     order = apps_section.get("order", {})

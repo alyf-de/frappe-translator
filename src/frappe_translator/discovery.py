@@ -58,14 +58,19 @@ def resolve_app_order(apps: list[AppInfo], priority: list[str]) -> list[AppInfo]
     return priority_apps + remaining_apps
 
 
-def get_target_languages(apps: list[AppInfo], language_filter: list[str] | None) -> list[str]:
-    """Get the union of all locale codes found across apps, optionally filtered."""
+def get_target_languages(
+    apps: list[AppInfo], language_filter: list[str] | None, exclude: list[str] | None = None
+) -> list[str]:
+    """Get the union of all locale codes found across apps, optionally filtered and excluded."""
     found: set[str] = set()
     for app in apps:
         found.update(app.po_paths.keys())
 
     if language_filter:
         found = found & set(language_filter)
+
+    if exclude:
+        found = found - set(exclude)
 
     return sorted(found)
 

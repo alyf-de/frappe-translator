@@ -47,7 +47,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     logger.info("Processing %d apps: %s", len(apps), [a.name for a in apps])
 
     # Determine target languages
-    target_languages = get_target_languages(apps, config.languages or None)
+    target_languages = get_target_languages(apps, config.languages or None, config.exclude_languages)
     if not target_languages:
         logger.error("No target languages found")
         return summary

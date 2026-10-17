@@ -46,6 +46,21 @@ frappe-translator translate /path/to/bench \
   --model sonnet
 ```
 
+### Exclude languages
+
+Skip locales you do not want to translate, e.g. Crowdin's `eo` pseudo-language:
+
+```bash
+frappe-translator translate /path/to/bench --exclude-language eo
+```
+
+Or in the config file:
+
+```toml
+[run]
+exclude_languages = ["eo"]
+```
+
 ### Skip glossary extraction (single-pass, faster)
 
 ```bash
