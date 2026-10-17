@@ -72,7 +72,7 @@ def migrate_bench_glossary(bench_path: Path, glossary_dir: Path, apps: list[AppI
     if isinstance(extracted, list):
         done = set(extracted)
         per_app = {app: sorted(done.intersection(msgids)) for app, msgids in pot_msgids.items()}
-        atomic_json_write(extracted_path, per_app)
+        atomic_json_write(extracted_path, {"glossary_dir": str(glossary_dir.resolve()), "apps": per_app})
         logger.info("Migrated %s to per-app format", extracted_path)
 
     if old_glossary_path.exists():

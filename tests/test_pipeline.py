@@ -98,7 +98,10 @@ async def test_pass1_adds_new_terms_to_app_file_unless_in_chain(
     assert app_path.read_text() == '{\n  "Cancel": {},\n  "Hello": {}\n}\n'
     assert json.loads(frappe_path.read_text()) == frappe_file
     extracted = json.loads((tmp_bench / "glossary_extracted.json").read_text())
-    assert extracted == {"sample_app": ["Cancel", "Hello World", "Invoice {0} has been submitted", "Save"]}
+    assert extracted == {
+        "glossary_dir": str(app_path.parent.resolve()),
+        "apps": {"sample_app": ["Cancel", "Hello World", "Invoice {0} has been submitted", "Save"]},
+    }
 
     # Second run: nothing left to extract
     runner.calls.clear()
@@ -124,8 +127,8 @@ def test_migrates_bench_wide_glossary_to_app_files(tmp_bench: Path) -> None:
         "Hello": {"de": {"text": "Servus", "source": "manual"}}
     }
     assert json.loads((tmp_bench / "glossary_extracted.json").read_text()) == {
-        "frappe": ["Sales Invoice"],
-        "sample_app": ["Cancel"],
+        "glossary_dir": str(glossary_dir.resolve()),
+        "apps": {"frappe": ["Sales Invoice"], "sample_app": ["Cancel"]},
     }
     assert not (tmp_bench / "glossary.json").exists()
     assert (tmp_bench / "glossary.json.migrated").exists()
@@ -151,3 +154,17 @@ def test_migration_gives_shared_term_to_each_app_outside_priority(tmp_bench: Pat
     assert json.loads((glossary_dir / "app_b.json").read_text()) == {"Payment": {}}
     # A priority app is in every chain, so it is enough there
     assert json.loads((glossary_dir / "frappe.json").read_text()) == {"Save": {}}
+
+
+async def test_changed_glossary_dir_extracts_terms_again(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = BatchRecordingRunner(_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+    old_dir, new_dir = tmp_bench / "old_glossaries", tmp_bench / "new_glossaries"
+
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, glossary_dir=old_dir, resume=False))
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, glossary_dir=new_dir, resume=False))
+
+    # The extraction cache belongs to old_dir, so the new folder gets its own terms
+    assert json.loads((new_dir / "sample_app.json").read_text()) == json.loads(
+        (old_dir / "sample_app.json").read_text()
+    )

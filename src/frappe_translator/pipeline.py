@@ -97,7 +97,12 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     # Pass 1: extract terms per app; new terms go into that app's glossary file as {}
     if not config.skip_glossary:
         extracted_path = bench_path / "glossary_extracted.json"
-        extracted: dict[str, list[str]] = json.loads(extracted_path.read_text()) if extracted_path.exists() else {}
+        cache = json.loads(extracted_path.read_text()) if extracted_path.exists() else {}
+        # The cache only says which msgids have their terms in *this* glossary_dir.
+        if cache and cache["glossary_dir"] != str(glossary_dir.resolve()):
+            logger.info("glossary_dir changed from %s, extracting terms again", cache["glossary_dir"])
+            cache = {}
+        extracted: dict[str, list[str]] = cache.get("apps", {})
 
         for app in apps:
             # Cache POT entries so _process_app doesn't re-parse them.
@@ -120,7 +125,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
                 logger.info("%s: added %d new terms to %s", app.name, len(new_terms), glossary_dir)
 
             extracted[app.name] = sorted(done | {e.msgid for e in uncovered})
-            atomic_json_write(extracted_path, extracted)
+            atomic_json_write(extracted_path, {"glossary_dir": str(glossary_dir.resolve()), "apps": extracted})
 
     # Runtime glossary per app: merged chain files, then PO lookups fill gaps, then [terminology] wins.
     # PO lookups are not written back; they are recomputed each run.

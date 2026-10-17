@@ -89,7 +89,7 @@ frappe-translator clear-progress /path/to/bench
 
 ### Two-pass pipeline
 
-1. **Pass 1 (term extraction):** Batches the translatable strings of each app and sends them to Claude to extract key domain-specific terms (e.g., "Invoice", "Purchase Order", "DocType"). This pass is optional (`--skip-glossary`) and cached across runs in `<bench>/glossary_extracted.json`. New terms are added to the app's glossary file without a translation. Pass 2 only reads the glossary and never adds terms.
+1. **Pass 1 (term extraction):** Batches the translatable strings of each app and sends them to Claude to extract key domain-specific terms (e.g., "Invoice", "Purchase Order", "DocType"). This pass is optional (`--skip-glossary`) and cached across runs in `<bench>/glossary_extracted.json`. If `glossary_dir` changes, the cache is not used and terms are extracted again. New terms are added to the app's glossary file without a translation. Pass 2 only reads the glossary and never adds terms.
 
 2. **Pass 2 (translation):** Strings are batched (default 50 per call) and sent to Claude with full context:
    - Source code snippets (up to 3 per string, from diverse files)
