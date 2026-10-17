@@ -15,7 +15,7 @@ class FakeRunner:
         self.captured_prompts: list[str] = []
         self._response = json.dumps(response if response is not None else {"terms": []})
 
-    async def run_batch(self, prompts: list[str]) -> list[str]:
+    async def run_batch(self, prompts: list[str], label: str) -> list[str]:
         self.captured_prompts.extend(prompts)
         return [self._response for _ in prompts]
 

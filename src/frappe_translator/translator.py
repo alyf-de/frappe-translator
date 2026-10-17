@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from frappe_translator.claude_runner import as_completed_logged
 from frappe_translator.models import AssembledContext, TranslationResult
 from frappe_translator.prompts import build_batch_translation_prompt, build_translation_schema, unique_source_files
 from frappe_translator.source_context import format_snippets
@@ -70,7 +70,7 @@ async def translate_entries(
         return batch_idx, raw
 
     # Launch all tasks — the runner's semaphore limits actual concurrency
-    pending = {asyncio.ensure_future(_run_one(i)): i for i in range(len(batches))}
+    runs = [_run_one(i) for i in range(len(batches))]
 
     entries_since_checkpoint = 0
     retry_contexts: list[AssembledContext] = []
@@ -78,52 +78,44 @@ async def translate_entries(
     total_errors = 0
     batches_done = 0
 
-    while pending:
-        done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            batch_idx, raw = task.result()
-            batch, batch_langs = batches[batch_idx]
-            del pending[task]
-            batches_done += 1
+    async for batch_idx, raw in as_completed_logged(runs, f"Pass 2 {app_name}", runner):
+        batch, batch_langs = batches[batch_idx]
+        batches_done += 1
 
-            batch_results = _process_batch_result(batch, raw, batch_langs)
+        batch_results = _process_batch_result(batch, raw, batch_langs)
 
-            batch_ok = 0
-            batch_err = 0
-            batch_skip = 0
-            for ctx, result in zip(batch, batch_results, strict=True):
-                if result.skipped:
-                    retry_contexts.append(ctx)
-                    batch_skip += 1
-                    continue
+        batch_ok = 0
+        batch_err = 0
+        batch_skip = 0
+        for ctx, result in zip(batch, batch_results, strict=True):
+            if result.skipped:
+                retry_contexts.append(ctx)
+                batch_skip += 1
+                continue
 
-                results.append(result)
-                batch_ok += len(result.translations)
-                batch_err += len(result.errors)
+            results.append(result)
+            batch_ok += len(result.translations)
+            batch_err += len(result.errors)
 
-                if result.translations:
-                    po_writer.buffer_translation(result)
-                    progress.mark_languages_done(
-                        app_name, result.msgid, result.msgctxt, list(result.translations.keys())
-                    )
+            if result.translations:
+                po_writer.buffer_translation(result)
+                progress.mark_languages_done(app_name, result.msgid, result.msgctxt, list(result.translations.keys()))
 
-                for lang, error in result.errors.items():
-                    progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
+            for lang, error in result.errors.items():
+                progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
 
-                entries_since_checkpoint += 1
+            entries_since_checkpoint += 1
 
-            total_translated += batch_ok
-            total_errors += batch_err
-            logger.info(
-                "Batch %d/%d done (%d/%d batches complete) — %d translated, %d errors, %d to retry",
-                batch_idx + 1,
-                len(batches),
-                batches_done,
-                len(batches),
-                batch_ok,
-                batch_err,
-                batch_skip,
-            )
+        total_translated += batch_ok
+        total_errors += batch_err
+        logger.info(
+            "Batch %d/%d: %d translated, %d errors, %d to retry",
+            batch_idx + 1,
+            len(batches),
+            batch_ok,
+            batch_err,
+            batch_skip,
+        )
 
         # Checkpoint after processing completed batches
         if entries_since_checkpoint >= checkpoint_interval:
@@ -151,29 +143,18 @@ async def translate_entries(
                 raw = None
             return ctx, raw
 
-        retry_pending = {asyncio.ensure_future(_retry_one(ctx)): ctx for ctx in retry_contexts}
-        retries_done = 0
-        while retry_pending:
-            done, _ = await asyncio.wait(retry_pending, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                ctx, raw = task.result()
-                del retry_pending[task]
-                retries_done += 1
+        retries = [_retry_one(ctx) for ctx in retry_contexts]
+        async for ctx, raw in as_completed_logged(retries, f"Retries {app_name}", runner):
+            entry_langs = ctx.target_languages or target_languages
+            result = _process_single_result(ctx, raw, entry_langs)
+            results.append(result)
 
-                entry_langs = ctx.target_languages or target_languages
-                result = _process_single_result(ctx, raw, entry_langs)
-                results.append(result)
+            if result.translations:
+                po_writer.buffer_translation(result)
+                progress.mark_languages_done(app_name, result.msgid, result.msgctxt, list(result.translations.keys()))
 
-                if result.translations:
-                    po_writer.buffer_translation(result)
-                    progress.mark_languages_done(
-                        app_name, result.msgid, result.msgctxt, list(result.translations.keys())
-                    )
-
-                for lang, error in result.errors.items():
-                    progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
-
-                logger.info("Retry %d/%d done: '%s'", retries_done, len(retry_contexts), ctx.entry.msgid[:50])
+            for lang, error in result.errors.items():
+                progress.mark_language_error(app_name, result.msgid, result.msgctxt, lang, error)
 
     # Summary
     translated = sum(1 for r in results if r.translations)

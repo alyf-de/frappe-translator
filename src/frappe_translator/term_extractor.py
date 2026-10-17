@@ -19,6 +19,7 @@ async def extract_terms(
     entries: list[TranslationEntry],
     runner: ClaudeRunner,
     batch_size: int = 50,
+    label: str = "Pass 1",
 ) -> TermGlossary:
     """Extract key terms from entries in batches using claude CLI.
 
@@ -59,7 +60,7 @@ async def extract_terms(
     prompts = [build_term_extraction_prompt(batch, i + 1) for i, batch in enumerate(batches)]
 
     # Run all batch prompts concurrently
-    results = await runner.run_batch(prompts)
+    results = await runner.run_batch(prompts, label)
 
     # Parse results and merge into glossary
     all_terms: set[str] = set()

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 class BatchRecordingRunner(RecordingRunner):
     """RecordingRunner that also serves Pass 1's run_batch."""
 
-    async def run_batch(self, prompts: list[str]) -> list[str]:
+    async def run_batch(self, prompts: list[str], label: str) -> list[str]:
         return [await self.run(prompt) for prompt in prompts]
 
 

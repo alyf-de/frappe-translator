@@ -5,6 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from asyncio.subprocess import PIPE
+from typing import TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Iterable
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +20,8 @@ _RATE_LIMIT_PATTERNS = ("rate limit", "rate_limit", "too many requests", "429")
 _MAX_RETRIES = 3
 _INITIAL_BACKOFF = 10.0  # seconds
 _BACKOFF_MULTIPLIER = 2.0
+
+_STATUS_INTERVAL = 60.0  # seconds between status lines while no call finishes
 
 
 def _is_rate_limited(text: str) -> bool:
@@ -34,6 +42,7 @@ class ClaudeRunner:
         self.errors = 0
         self._backoff_lock = asyncio.Lock()
         self._backoff_until = 0.0  # asyncio event loop time when backoff expires
+        self.running_since: dict[object, float] = {}  # event loop start time of each running call
 
     async def _wait_for_backoff(self) -> None:
         """Wait if a global backoff is active (from a recent rate limit)."""
@@ -79,68 +88,103 @@ class ClaudeRunner:
     async def _execute(self, prompt: str, json_schema: str | None = None) -> str:
         """Execute a single Claude CLI call (no retry logic)."""
         async with self._semaphore:
-            model_args = ["--model", self.model] if self.model else []
-            schema_args = ["--json-schema", json_schema] if json_schema else []
-            process = await asyncio.create_subprocess_exec(
-                "claude",
-                "-p",
-                "--output-format",
-                "json",
-                "--tools",
-                "",
-                "--disable-slash-commands",
-                "--no-session-persistence",
-                *model_args,
-                *schema_args,
-                stdin=PIPE,
-                stdout=PIPE,
-                stderr=PIPE,
-            )
+            call = object()
+            self.running_since[call] = asyncio.get_running_loop().time()
             try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    process.communicate(input=prompt.encode("utf-8")),
-                    timeout=self.timeout,
+                model_args = ["--model", self.model] if self.model else []
+                schema_args = ["--json-schema", json_schema] if json_schema else []
+                process = await asyncio.create_subprocess_exec(
+                    "claude",
+                    "-p",
+                    "--output-format",
+                    "json",
+                    "--tools",
+                    "",
+                    "--disable-slash-commands",
+                    "--no-session-persistence",
+                    *model_args,
+                    *schema_args,
+                    stdin=PIPE,
+                    stdout=PIPE,
+                    stderr=PIPE,
                 )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                self.errors += 1
-                raise RuntimeError(f"Claude CLI timed out after {self.timeout}s") from None
-            finally:
-                self.total_calls += 1
-
-            stdout = stdout_bytes.decode("utf-8") if stdout_bytes else ""
-            stderr = stderr_bytes.decode("utf-8") if stderr_bytes else ""
-
-            if process.returncode != 0:
-                if stdout:
-                    logger.debug(
-                        "Claude CLI exited with code %d but produced stdout; using output. stderr: %s",
-                        process.returncode,
-                        stderr[:200],
+                try:
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                        process.communicate(input=prompt.encode("utf-8")),
+                        timeout=self.timeout,
                     )
-                    return stdout
-                self.errors += 1
-                raise RuntimeError(f"Claude CLI exited with code {process.returncode}. stderr: {stderr[:500]}")
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    self.errors += 1
+                    raise RuntimeError(f"Claude CLI timed out after {self.timeout}s") from None
+                finally:
+                    self.total_calls += 1
 
-            return stdout
+                stdout = stdout_bytes.decode("utf-8") if stdout_bytes else ""
+                stderr = stderr_bytes.decode("utf-8") if stderr_bytes else ""
 
-    async def run_batch(self, prompts: list[str], json_schemas: list[str | None] | None = None) -> list[str | None]:
+                if process.returncode != 0:
+                    if stdout:
+                        logger.debug(
+                            "Claude CLI exited with code %d but produced stdout; using output. stderr: %s",
+                            process.returncode,
+                            stderr[:200],
+                        )
+                        return stdout
+                    self.errors += 1
+                    raise RuntimeError(f"Claude CLI exited with code {process.returncode}. stderr: {stderr[:500]}")
+
+                return stdout
+            finally:
+                del self.running_since[call]
+
+    async def run_batch(self, prompts: list[str], label: str) -> list[str | None]:
         """Run multiple prompts concurrently and return results in the same order.
 
         Failed prompts produce None in the result list.
-        If json_schemas is provided, each prompt gets its corresponding schema.
         """
-        schemas = json_schemas or [None] * len(prompts)
-        tasks = [self.run(prompt, json_schema=schema) for prompt, schema in zip(prompts, schemas, strict=True)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        output: list[str | None] = []
-        for i, result in enumerate(results):
-            if isinstance(result, BaseException):
-                logger.error("Prompt %d failed: %s", i, result)
-                output.append(None)
-            else:
-                output.append(result)
+        async def run_one(i: int) -> tuple[int, str | None]:
+            try:
+                return i, await self.run(prompts[i])
+            except Exception as e:
+                logger.error("Prompt %d failed: %s", i, e)
+                return i, None
 
+        output: list[str | None] = [None] * len(prompts)
+        async for i, result in as_completed_logged([run_one(i) for i in range(len(prompts))], label, self):
+            output[i] = result
         return output
+
+
+async def as_completed_logged(aws: Iterable[Awaitable[T]], label: str, runner: ClaudeRunner) -> AsyncIterator[T]:
+    """Yield the results of ``aws`` as they finish.
+
+    Logs a status line after each result, and every minute while no call finishes.
+    """
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    pending = {asyncio.ensure_future(aw) for aw in aws}
+    total = len(pending)
+    while pending:
+        done, pending = await asyncio.wait(pending, timeout=_STATUS_INTERVAL, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            yield task.result()
+        finished = total - len(pending)
+        now = loop.time()
+        elapsed = now - start
+        parts = [f"{finished}/{total} batches ({finished * 100 // total}%)"]
+        if runner.running_since:
+            longest = now - min(runner.running_since.values())
+            parts.append(f"{len(runner.running_since)} running, longest {_duration(longest)}")
+        parts.append(f"elapsed {_duration(elapsed)}")
+        if 0 < finished < total:
+            parts.append(f"ETA ~{_duration(elapsed / finished * (total - finished))}")
+        logger.info("%s: %s", label, ", ".join(parts))
+
+
+def _duration(seconds: float) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m{secs:02d}s"

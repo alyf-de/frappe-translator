@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
 from typing import TYPE_CHECKING
 
 from frappe_translator._io import atomic_json_write
-from frappe_translator.claude_runner import ClaudeRunner
+from frappe_translator.claude_runner import ClaudeRunner, as_completed_logged
 from frappe_translator.context_assembler import assemble_contexts
 from frappe_translator.discovery import discover_bench, get_app_languages, get_target_languages, resolve_app_order
 from frappe_translator.glossary import (
@@ -284,10 +283,8 @@ async def _translate_glossary_terms(
 
     glossary_dir = config.get_glossary_dir()
     failed = 0
-    for next_done in asyncio.as_completed(
-        [run_one(batch, prompt) for batch, prompt in zip(batches, prompts, strict=True)]
-    ):
-        batch, raw = await next_done
+    runs = [run_one(batch, prompt) for batch, prompt in zip(batches, prompts, strict=True)]
+    async for batch, raw in as_completed_logged(runs, f"Glossary {app.name}", runner):
         if raw is None:
             failed += 1
             continue
@@ -358,7 +355,7 @@ async def extract_new_terms(
         if not uncovered:
             continue
 
-        extracted_terms = await extract_terms(uncovered, runner, config.batch_size)
+        extracted_terms = await extract_terms(uncovered, runner, config.batch_size, f"Pass 1 {app.name}")
         known = {term.lower() for a in app_chain(app.name, app_names, config.app_priority) for term in files[a]}
         new_terms = []
         for term in extracted_terms.terms:

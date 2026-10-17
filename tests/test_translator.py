@@ -36,6 +36,7 @@ class RecordingRunner:
         self.response_fn = response_fn or _default_response
         self.raise_on_indices = raise_on_indices or set()
         self.return_invalid_on_indices = return_invalid_on_indices or set()
+        self.running_since: dict[object, float] = {}
 
     async def run(self, prompt: str, json_schema: str | None = None) -> str:
         idx = len(self.calls)
