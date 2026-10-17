@@ -135,7 +135,9 @@ Each app has an optional glossary file `<glossary_dir>/<app>.json`. The default 
 
 `source` is `manual`, `opus` or `sonnet`. A term with `{}` was extracted, but has no curated translation yet.
 
-The `glossary` command fills the term and language pairs of each app file. It sends the term, up to 3 source strings that contain it and the existing PO translations as hints. It writes the results with `source` set to the model tier (`sonnet` or `opus`). A run writes a pair only if it has no entry or a lower source: `manual` > `opus` > `sonnet`. So a Sonnet run fills gaps, an Opus run also replaces Sonnet entries, and no run changes `manual` entries. The file is saved after each batch, so an interrupted run continues where it stopped.
+Terms are compared without case: "Party" and "party" are the same term. When a file has both, they are merged on load. For each language, the entry with the higher source is kept.
+
+The `glossary` command fills the term and language pairs of each app file. It sends the term, up to 3 source strings that contain it and the existing PO translations as hints. It writes the results with `source` set to the model tier (`sonnet` or `opus`). A run writes a pair only if it has no entry or a lower source: `manual` > `opus` > `sonnet`. So a Sonnet run fills gaps, an Opus run also replaces Sonnet entries, and no run changes `manual` entries. The command translates only terms that occur in at least 5 different strings of the app. It removes other terms from the file if they have no translations. Terms with translations are always kept. The file is saved after each batch, so an interrupted run continues where it stopped.
 
 Glossary entries win over existing PO translations. Strings that were translated before keep their old term until they are translated again.
 

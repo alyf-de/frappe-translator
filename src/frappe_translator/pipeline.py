@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import re
-from itertools import islice
 from typing import TYPE_CHECKING
 
 from frappe_translator._io import atomic_json_write
@@ -42,6 +41,9 @@ if TYPE_CHECKING:
     from frappe_translator.models import AppInfo
 
 logger = logging.getLogger(__name__)
+
+# The glossary command translates only terms used in at least this many distinct strings of the app.
+MIN_TERM_STRINGS = 5
 
 
 async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
@@ -165,14 +167,27 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
     files = {app.name: load_glossary_file(glossary_dir, app.name) for app in all_apps_ordered}
 
     if seed:
-        first_app = all_apps_ordered[0].name
-        seed_glossary(files, apps, first_app, config.app_priority)
-        for name in {first_app, *(app.name for app in apps)}:
-            if files[name]:
-                save_glossary_file(glossary_dir, name, files[name])
+        seed_glossary(files, apps, all_apps_ordered[0].name, config.app_priority)
 
     pot_cache: dict[str, list[TranslationEntry]] = {}
     await extract_new_terms(config, apps, files, _extract_runner(config), pot_cache)
+
+    usage = {app.name: _term_usage(files[app.name], pot_cache[app.name]) for app in apps}
+    for app in apps:
+        rare = [
+            term
+            for term, langs in files[app.name].items()
+            if not langs and len(usage[app.name][term]) < MIN_TERM_STRINGS
+        ]
+        for term in rare:
+            del files[app.name][term]
+        logger.info(
+            "Glossary %s: removed %d untranslated terms in fewer than %d strings", app.name, len(rare), MIN_TERM_STRINGS
+        )
+    # Also writes the case merge and the seed of each loaded file
+    for name, data in files.items():
+        if data or (glossary_dir / f"{name}.json").exists():
+            save_glossary_file(glossary_dir, name, data)
 
     all_terms = sorted({term for app in apps for term in files[app.name]})
     po_hints = lookup_terms_batch(all_terms, {app.name: app.po_paths for app in all_apps_ordered})
@@ -183,7 +198,7 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
             files[app.name],
             get_app_languages(app, target_languages),
             tier,
-            pot_cache[app.name],
+            usage[app.name],
             po_hints,
             runner,
             config,
@@ -191,12 +206,27 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
     return failed
 
 
+def _term_usage(terms: GlossaryFile, entries: list[TranslationEntry]) -> dict[str, list[str]]:
+    """Map each term to the distinct msgids that contain it as a whole word, ignoring case."""
+    msgids = list(dict.fromkeys(entry.msgid for entry in entries))
+    msgids_lower = [msgid.lower() for msgid in msgids]
+    usage = {}
+    for term in terms:
+        term_lower = term.lower()
+        pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
+        # The substring test is a fast pre-filter for the regex
+        usage[term] = [
+            m for m, m_lower in zip(msgids, msgids_lower, strict=True) if term_lower in m_lower and pattern.search(m)
+        ]
+    return usage
+
+
 async def _translate_glossary_terms(
     app: AppInfo,
     terms: GlossaryFile,
     langs: list[str],
     tier: str,
-    entries: list[TranslationEntry],
+    usage: dict[str, list[str]],
     po_hints: dict[str, dict[str, str]],
     runner: ClaudeRunner,
     config: TranslatorConfig,
@@ -207,27 +237,37 @@ async def _translate_glossary_terms(
     """
     rank = SOURCE_RANK[tier]
     todo: dict[str, list[str]] = {}
+    examples: dict[str, list[str]] = {}
+    rare = 0
     for term, translations in terms.items():
         missing = [
             lang for lang in langs if lang not in translations or SOURCE_RANK[translations[lang]["source"]] < rank
         ]
-        if missing:
-            todo[term] = missing
-    logger.info("Glossary %s: %d terms to translate", app.name, len(todo))
+        if not missing:
+            continue
+        if len(usage[term]) < MIN_TERM_STRINGS:
+            rare += 1
+            continue
+        todo[term] = missing
+        examples[term] = usage[term][:3]
+    logger.info(
+        "Glossary %s: %d terms to translate, %d skipped (in fewer than %d strings)",
+        app.name,
+        len(todo),
+        rare,
+        MIN_TERM_STRINGS,
+    )
     if not todo:
         return 0
 
-    msgids = [entry.msgid for entry in entries]
     todo_items = list(todo.items())
     batches = [dict(todo_items[i : i + config.batch_size]) for i in range(0, len(todo_items), config.batch_size)]
 
     def build_prompt(batch: dict[str, list[str]]) -> str:
         items = []
         for term, missing in batch.items():
-            pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
-            examples = list(islice((m for m in msgids if pattern.search(m)), 3))
             hints = {lang: text for lang, text in po_hints[term].items() if lang in missing}
-            items.append({"term": term, "languages": missing, "examples": examples, "hints": hints})
+            items.append({"term": term, "languages": missing, "examples": examples[term], "hints": hints})
         return build_glossary_prompt(items)
 
     # Build all prompts before the first subprocess starts: this blocking work would otherwise
@@ -319,8 +359,12 @@ async def extract_new_terms(
             continue
 
         extracted_terms = await extract_terms(uncovered, runner, config.batch_size)
-        chain = app_chain(app.name, app_names, config.app_priority)
-        new_terms = [t for t in extracted_terms.terms if not any(t in files[a] for a in chain)]
+        known = {term.lower() for a in app_chain(app.name, app_names, config.app_priority) for term in files[a]}
+        new_terms = []
+        for term in extracted_terms.terms:
+            if term.lower() not in known:
+                new_terms.append(term)
+                known.add(term.lower())
         if new_terms:
             for term in new_terms:
                 files[app.name][term] = {}

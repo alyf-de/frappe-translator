@@ -30,6 +30,12 @@ def _response(prompt: str, schema: str | None) -> str:
     return json.dumps({"terms": terms})
 
 
+@pytest.fixture(autouse=True)
+def _no_min_term_strings(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The fixture POT has only a few strings
+    monkeypatch.setattr(pipeline, "MIN_TERM_STRINGS", 0)
+
+
 async def _run(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch, tier: str, seed: bool = False) -> BatchRecordingRunner:
     runner = BatchRecordingRunner(_response)
     monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
@@ -135,3 +141,27 @@ def test_load_glossary_file_rejects_plain_string_term(tmp_path: Path) -> None:
     (tmp_path / "frappe.json").write_text(json.dumps({"Submit": "Buchen"}))
     with pytest.raises(ValueError, match=r"frappe\.json.*'Submit'"):
         load_glossary_file(tmp_path, "frappe")
+
+
+async def test_rare_terms_are_removed_or_skipped(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipeline, "MIN_TERM_STRINGS", 1)
+    manual = {"de": {"text": "Auf Wiedersehen", "source": "manual"}}
+    # The fixture POT has "Hello World", but no string with "Hell" or "Goodbye"
+    _write_glossary(tmp_bench, "sample_app", {"hello": {}, "HELLO": {}, "Hell": {}, "Goodbye": manual})
+
+    await _run(tmp_bench, monkeypatch, "opus")
+
+    # "HELLO" is merged into "hello"; "Hell" is removed; "Goodbye" keeps its translation, without a new "fr"
+    assert _read(tmp_bench, "sample_app") == {
+        "hello": {"de": {"text": "hello::de", "source": "opus"}, "fr": {"text": "hello::fr", "source": "opus"}},
+        "Goodbye": manual,
+    }
+
+
+def test_load_glossary_file_merges_case_duplicates(tmp_path: Path) -> None:
+    manual = {"text": "Partei", "source": "manual"}
+    opus = {"text": "Party", "source": "opus"}
+    data = {"Party": {"de": opus, "fr": opus}, "party": {"de": manual, "it": opus}}
+    (tmp_path / "frappe.json").write_text(json.dumps(data))
+
+    assert load_glossary_file(tmp_path, "frappe") == {"Party": {"de": manual, "fr": opus, "it": opus}}

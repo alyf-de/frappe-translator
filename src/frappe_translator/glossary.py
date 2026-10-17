@@ -5,6 +5,7 @@ File format of ``<glossary_dir>/<app>.json``::
     {"Opening": {"de": {"text": "Eröffnung", "source": "opus"}}, "Party": {}}
 
 A term with ``{}`` was extracted but has no curated translation yet.
+Terms are compared case-insensitively; the first spelling seen is kept.
 """
 
 from __future__ import annotations
@@ -65,7 +66,20 @@ def load_glossary_file(glossary_dir: Path, app: str) -> GlossaryFile:
                 raise ValueError(
                     f'{path}: {term!r} / {lang!r} must be {{"text": ..., "source": "manual"}}, got {entry!r}'
                 )
-    return data
+    return _merge_case_duplicates(data)
+
+
+def _merge_case_duplicates(data: GlossaryFile) -> GlossaryFile:
+    """Merge terms that differ only in case; per language the higher source wins."""
+    merged: GlossaryFile = {}
+    spellings: dict[str, str] = {}
+    for term, langs in data.items():
+        merged_langs = merged.setdefault(spellings.setdefault(term.lower(), term), {})
+        for lang, entry in langs.items():
+            current = merged_langs.get(lang)
+            if current is None or SOURCE_RANK[entry["source"]] > SOURCE_RANK[current["source"]]:
+                merged_langs[lang] = entry
+    return merged
 
 
 def save_glossary_file(glossary_dir: Path, app: str, data: GlossaryFile) -> None:
@@ -81,9 +95,10 @@ def app_chain(app: str, app_names: set[str], priority: list[str]) -> list[str]:
 def merge_chain(files: dict[str, GlossaryFile], chain: list[str]) -> dict[str, dict[str, str]]:
     """Merge the chain's files into {term: {lang: text}}; later apps win per (term, lang)."""
     merged: dict[str, dict[str, str]] = {}
+    spellings: dict[str, str] = {}
     for app in chain:
         for term, langs in files[app].items():
-            merged_langs = merged.setdefault(term, {})
+            merged_langs = merged.setdefault(spellings.setdefault(term.lower(), term), {})
             for lang, entry in langs.items():
                 merged_langs[lang] = entry["text"]
     return merged
@@ -105,14 +120,17 @@ def seed_glossary(files: dict[str, GlossaryFile], apps: list[AppInfo], first_app
 
     A DocType name already in the app's chain is not added again. Existing entries are kept.
     """
+    first_known = {term.lower() for term in files[first_app]}
     for term in CORE_TERMS:
-        files[first_app].setdefault(term, {})
+        if term.lower() not in first_known:
+            files[first_app][term] = {}
     app_names = set(files)
     for app in apps:
-        chain = app_chain(app.name, app_names, priority)
+        known = {term.lower() for a in app_chain(app.name, app_names, priority) for term in files[a]}
         for name in doctype_names(app):
-            if not any(name in files[a] for a in chain):
+            if name.lower() not in known:
                 files[app.name][name] = {}
+                known.add(name.lower())
 
 
 def migrate_bench_glossary(bench_path: Path, glossary_dir: Path, apps: list[AppInfo], priority: list[str]) -> None:
