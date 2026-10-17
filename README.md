@@ -85,6 +85,8 @@ The seed runs Pass 1 on all strings. To extract the terms with a cheaper model, 
 
 The command runs Pass 1 first. `--app`, `--language` and `--exclude-language` work as for `translate`. See [Glossary](#glossary).
 
+The command only runs the slower Sonnet and Opus models, so it sends 10 terms per call and waits up to 600 seconds. It ignores `batch_size` and `timeout` in the config file. To change these values, use `--batch-size` and `--timeout`.
+
 ### Check translation coverage
 
 ```bash

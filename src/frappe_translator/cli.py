@@ -147,8 +147,8 @@ def translate(
     help="Folder with per-app glossary files (default: <bench>/glossaries)",
 )
 @click.option("--concurrency", type=click.IntRange(1, 50), default=5, help="Max parallel claude processes")
-@click.option("--batch-size", type=int, default=50, help="Terms per batch")
-@click.option("--timeout", type=int, default=120, help="Timeout per claude call in seconds")
+@click.option("--batch-size", type=int, default=10, help="Terms per batch (ignores [general] batch_size)")
+@click.option("--timeout", type=int, default=600, help="Timeout per claude call in seconds (ignores [general] timeout)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.pass_context
 def glossary(
@@ -196,10 +196,9 @@ def glossary(
     source = ctx.get_parameter_source
     if source("concurrency") != click.core.ParameterSource.DEFAULT:
         cfg.concurrency = concurrency
-    if source("batch_size") != click.core.ParameterSource.DEFAULT:
-        cfg.batch_size = batch_size
-    if source("timeout") != click.core.ParameterSource.DEFAULT:
-        cfg.timeout = timeout
+    # [general] batch_size and timeout fit `translate` with a fast model; this command needs sonnet or opus
+    cfg.batch_size = batch_size
+    cfg.timeout = timeout
 
     _check_claude_cli()
 
