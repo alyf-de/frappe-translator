@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from typing import TYPE_CHECKING
 
@@ -41,3 +42,29 @@ async def test_logs_progress_and_heartbeat(caplog: pytest.LogCaptureFixture, mon
     # Heartbeat while the slow call runs, without a new result
     assert lines[1].startswith("Glossary frappe: 1/2 batches (50%), 1 running")
     assert lines[-1] == "Glossary frappe: 2/2 batches (100%), elapsed 0m00s"
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+async def test_shows_progress_bar_in_terminal(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    terminal = _Terminal()
+    monkeypatch.setattr(claude_runner.sys, "stderr", terminal)
+
+    async def call(i: int) -> int:
+        return i
+
+    with caplog.at_level(logging.INFO):
+        results = [r async for r in as_completed_logged([call(1), call(2)], "Glossary frappe", ClaudeRunner())]
+
+    assert sorted(results) == [1, 2]
+    output = terminal.getvalue()
+    assert "Glossary frappe" in output
+    assert "2/2" in output
+    assert "100%" in output
+    # No status log lines while the bar is shown
+    assert not caplog.records

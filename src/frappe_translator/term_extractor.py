@@ -77,7 +77,7 @@ async def extract_terms(
             terms = data.get("terms", [])
             if isinstance(terms, list):
                 all_terms.update(str(t) for t in terms if t)
-                logger.info("Batch %d: extracted %d terms", i + 1, len(terms))
+                logger.debug("Batch %d: extracted %d terms", i + 1, len(terms))
             else:
                 logger.warning("Batch %d: 'terms' is not a list: %s", i + 1, type(terms))
         except (ValueError, KeyError) as e:

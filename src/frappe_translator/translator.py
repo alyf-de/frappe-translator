@@ -108,7 +108,7 @@ async def translate_entries(
 
         total_translated += batch_ok
         total_errors += batch_err
-        logger.info(
+        logger.debug(
             "Batch %d/%d: %d translated, %d errors, %d to retry",
             batch_idx + 1,
             len(batches),
@@ -119,7 +119,7 @@ async def translate_entries(
 
         # Checkpoint after processing completed batches
         if entries_since_checkpoint >= checkpoint_interval:
-            logger.info(
+            logger.debug(
                 "Checkpoint (%d/%d batches, %d entries), flushing...",
                 batches_done,
                 len(batches),

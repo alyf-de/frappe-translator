@@ -316,7 +316,7 @@ async def _translate_glossary_terms(
                 written_terms.add(term)
                 written_langs.add(lang)
         save_glossary_file(glossary_dir, app.name, terms)
-        logger.info(
+        logger.debug(
             "Glossary %s: updated %d terms in %d languages (%d translations)",
             app.name,
             len(written_terms),

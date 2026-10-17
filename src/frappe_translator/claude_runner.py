@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import sys
 from asyncio.subprocess import PIPE
 from typing import TYPE_CHECKING, TypeVar
+
+import click
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Iterable
@@ -22,6 +26,7 @@ _INITIAL_BACKOFF = 10.0  # seconds
 _BACKOFF_MULTIPLIER = 2.0
 
 _STATUS_INTERVAL = 60.0  # seconds between status lines while no call finishes
+_BAR_INTERVAL = 1.0  # seconds between redraws of the progress bar
 
 
 def _is_rate_limited(text: str) -> bool:
@@ -161,27 +166,44 @@ class ClaudeRunner:
 async def as_completed_logged(aws: Iterable[Awaitable[T]], label: str, runner: ClaudeRunner) -> AsyncIterator[T]:
     """Yield the results of ``aws`` as they finish.
 
-    Logs a status line after each result, and every minute while no call finishes.
+    In a terminal, shows a progress bar on stderr. Otherwise (e.g. cron), logs a status line
+    after each result, and every minute while no call finishes.
     """
     loop = asyncio.get_running_loop()
     start = loop.time()
     pending = {asyncio.ensure_future(aw) for aw in aws}
     total = len(pending)
-    while pending:
-        done, pending = await asyncio.wait(pending, timeout=_STATUS_INTERVAL, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            yield task.result()
-        finished = total - len(pending)
-        now = loop.time()
-        elapsed = now - start
-        parts = [f"{finished}/{total} batches ({finished * 100 // total}%)"]
-        if runner.running_since:
-            longest = now - min(runner.running_since.values())
-            parts.append(f"{len(runner.running_since)} running, longest {_duration(longest)}")
-        parts.append(f"elapsed {_duration(elapsed)}")
-        if 0 < finished < total:
-            parts.append(f"ETA ~{_duration(elapsed / finished * (total - finished))}")
-        logger.info("%s: %s", label, ", ".join(parts))
+    if not total:
+        return
+    # click's own ETA is wrong before the first result, so the status text has ours
+    bar = (
+        click.progressbar(
+            length=total, label=label, file=sys.stderr, show_pos=True, show_percent=True, item_show_func=lambda s: s
+        )
+        if sys.stderr.isatty()
+        else None
+    )
+    with bar or contextlib.nullcontext():
+        while pending:
+            interval = _BAR_INTERVAL if bar else _STATUS_INTERVAL
+            done, pending = await asyncio.wait(pending, timeout=interval, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                yield task.result()
+            finished = total - len(pending)
+            now = loop.time()
+            elapsed = now - start
+            parts = []
+            if runner.running_since:
+                longest = now - min(runner.running_since.values())
+                parts.append(f"{len(runner.running_since)} running, longest {_duration(longest)}")
+            parts.append(f"elapsed {_duration(elapsed)}")
+            if 0 < finished < total:
+                parts.append(f"ETA ~{_duration(elapsed / finished * (total - finished))}")
+            status = ", ".join(parts)
+            if bar:
+                bar.update(len(done), status)
+            else:
+                logger.info("%s: %d/%d batches (%d%%), %s", label, finished, total, finished * 100 // total, status)
 
 
 def _duration(seconds: float) -> str:
