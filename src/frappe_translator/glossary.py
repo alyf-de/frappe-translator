@@ -55,7 +55,17 @@ def load_glossary_file(glossary_dir: Path, app: str) -> GlossaryFile:
     path = glossary_dir / f"{app}.json"
     if not path.exists():
         return {}
-    return json.loads(path.read_text())
+    data = json.loads(path.read_text())
+    # Files are edited by hand, so name the bad entry instead of failing later with a TypeError
+    for term, langs in data.items():
+        if not isinstance(langs, dict):
+            raise ValueError(f"{path}: {term!r} must be an object of languages, got {langs!r}")
+        for lang, entry in langs.items():
+            if not isinstance(entry, dict) or entry.get("source") not in SOURCE_RANK or "text" not in entry:
+                raise ValueError(
+                    f'{path}: {term!r} / {lang!r} must be {{"text": ..., "source": "manual"}}, got {entry!r}'
+                )
+    return data
 
 
 def save_glossary_file(glossary_dir: Path, app: str, data: GlossaryFile) -> None:

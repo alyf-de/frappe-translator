@@ -5,18 +5,17 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pytest
 from click.testing import CliRunner
 
 from frappe_translator import pipeline
 from frappe_translator.cli import main
 from frappe_translator.config import TranslatorConfig
-from frappe_translator.glossary import CORE_TERMS
+from frappe_translator.glossary import CORE_TERMS, load_glossary_file
 from tests.test_pipeline import BatchRecordingRunner, _add_app, _write_glossary
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _response(prompt: str, schema: str | None) -> str:
@@ -124,3 +123,15 @@ async def test_failed_batches_are_counted(tmp_bench: Path, monkeypatch: pytest.M
 
     assert failed == 1
     assert _read(tmp_bench, "sample_app") == {"Hello": {}}
+
+
+def test_load_glossary_file_rejects_plain_string_entry(tmp_path: Path) -> None:
+    (tmp_path / "frappe.json").write_text(json.dumps({"Submit": {"de": "Buchen"}}))
+    with pytest.raises(ValueError, match=r"frappe\.json.*'Submit'.*'de'"):
+        load_glossary_file(tmp_path, "frappe")
+
+
+def test_load_glossary_file_rejects_plain_string_term(tmp_path: Path) -> None:
+    (tmp_path / "frappe.json").write_text(json.dumps({"Submit": "Buchen"}))
+    with pytest.raises(ValueError, match=r"frappe\.json.*'Submit'"):
+        load_glossary_file(tmp_path, "frappe")
