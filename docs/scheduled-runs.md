@@ -64,9 +64,10 @@ Use one clone per app and one git worktree per branch. All branches share one ob
 
 ```bash
 mkdir -p ~/translate/repos
-for APP in frappe erpnext hrms; do   # your app list
-  git clone --filter=blob:none --origin upstream "https://github.com/frappe/$APP" ~/translate/repos/$APP
+for APP in frappe erpnext hrms; do
+  git clone --filter=blob:none --no-checkout --origin upstream "https://github.com/frappe/$APP" ~/translate/repos/$APP
   cd ~/translate/repos/$APP
+  git checkout --detach -q upstream/HEAD
   git remote add origin "https://github.com/<your-fork-org>/$APP"
   gh repo set-default "frappe/$APP"
   for BASE in version-15-hotfix version-16-hotfix develop; do
