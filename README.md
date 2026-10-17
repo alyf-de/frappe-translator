@@ -151,6 +151,8 @@ Pass it with `--config frappe-translator.toml`.
 
 To run the tool every night on a server and open pull requests automatically, see [docs/scheduled-runs.md](docs/scheduled-runs.md).
 
+For a quality comparison of Haiku and Sonnet as translation models, see [docs/model-comparison.md](docs/model-comparison.md).
+
 ## Development
 
 ```bash
