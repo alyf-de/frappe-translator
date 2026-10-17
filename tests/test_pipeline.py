@@ -1,0 +1,170 @@
+"""End-to-end pipeline tests with a fake ClaudeRunner."""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING
+
+from frappe_translator import pipeline
+from frappe_translator.config import TranslatorConfig
+from frappe_translator.discovery import discover_bench, resolve_app_order
+from frappe_translator.glossary import migrate_bench_glossary
+from tests.test_translator import RecordingRunner, _default_response
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
+
+
+class BatchRecordingRunner(RecordingRunner):
+    """RecordingRunner that also serves Pass 1's run_batch."""
+
+    async def run_batch(self, prompts: list[str]) -> list[str]:
+        return [await self.run(prompt) for prompt in prompts]
+
+
+def _response(prompt: str, schema: str | None) -> str:
+    if schema is None:  # Pass 1 term extraction
+        return json.dumps({"terms": ["Invoice", "Hello", "Cancel"]})
+    data = json.loads(_default_response(prompt, schema))
+    # A term map the model might still volunteer; it must never be persisted
+    data["terms"] = {"Invoice": {"de": "Model-Rechnung"}}
+    return json.dumps(data)
+
+
+def _add_app(bench: Path, name: str, msgids: list[str]) -> None:
+    locale_dir = bench / "apps" / name / name / "locale"
+    locale_dir.mkdir(parents=True)
+    body = "".join(f'\nmsgid "{msgid}"\nmsgstr ""\n' for msgid in msgids)
+    (locale_dir / "main.pot").write_text('msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=utf-8\\n"\n' + body)
+
+
+def _write_glossary(bench: Path, app: str, data: dict) -> Path:
+    path = bench / "glossaries" / f"{app}.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(data))
+    return path
+
+
+async def test_runtime_glossary_merges_chain_po_lookup_and_terminology(
+    tmp_bench: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_app(tmp_bench, "frappe", ["Invoice"])
+    _add_app(tmp_bench, "other_app", ["Save"])
+    files = {
+        "frappe": {
+            "Invoice": {"de": {"text": "Rechnung", "source": "manual"}, "fr": {"text": "Facture-f", "source": "opus"}}
+        },
+        "sample_app": {"Invoice": {"fr": {"text": "Facture", "source": "opus"}}, "Cancel": {}},
+        # Not in sample_app's chain: must not be used
+        "other_app": {"Save": {"de": {"text": "Sichern", "source": "manual"}}},
+    }
+    paths = {app: _write_glossary(tmp_bench, app, data) for app, data in files.items()}
+    runner = BatchRecordingRunner(_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    config = TranslatorConfig(
+        bench_path=tmp_bench,
+        skip_glossary=True,
+        resume=False,
+        terminology={"de": {"Invoice": "Faktura"}},
+    )
+    await pipeline.run_pipeline(config)
+
+    prompts = [prompt for prompt, _ in runner.calls]
+    assert any('"Invoice": {"de": "Faktura", "fr": "Facture"}' in p for p in prompts)
+    # PO lookup fills the empty file entry
+    assert any('"Cancel": {"de": "Abbrechen"}' in p for p in prompts)
+    assert not any("Sichern" in p for p in prompts)
+    # Neither terminology, PO lookups nor model output reach the glossary files
+    for app, path in paths.items():
+        assert json.loads(path.read_text()) == files[app]
+
+
+async def test_pass1_adds_new_terms_to_app_file_unless_in_chain(
+    tmp_bench: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_app(tmp_bench, "frappe", ["Invoice"])
+    frappe_file = {"Invoice": {"de": {"text": "Rechnung", "source": "manual"}}}
+    frappe_path = _write_glossary(tmp_bench, "frappe", frappe_file)
+    runner = BatchRecordingRunner(_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    config = TranslatorConfig(bench_path=tmp_bench, apps=["sample_app"], resume=False)
+    await pipeline.run_pipeline(config)
+
+    app_path = tmp_bench / "glossaries" / "sample_app.json"
+    assert app_path.read_text() == '{\n  "Cancel": {},\n  "Hello": {}\n}\n'
+    assert json.loads(frappe_path.read_text()) == frappe_file
+    extracted = json.loads((tmp_bench / "glossary_extracted.json").read_text())
+    assert extracted == {
+        "glossary_dir": str(app_path.parent.resolve()),
+        "apps": {"sample_app": ["Cancel", "Hello World", "Invoice {0} has been submitted", "Save"]},
+    }
+
+    # Second run: nothing left to extract
+    runner.calls.clear()
+    await pipeline.run_pipeline(config)
+    assert all(schema is not None for _, schema in runner.calls)
+
+
+def test_migrates_bench_wide_glossary_to_app_files(tmp_bench: Path) -> None:
+    _add_app(tmp_bench, "frappe", ["Sales Invoice"])
+    old_glossary = {"invoice": {"de": "Rechnung"}, "Hello": {"de": "Hallo"}, "Unknown Term": {}}
+    (tmp_bench / "glossary.json").write_text(json.dumps(old_glossary))
+    (tmp_bench / "glossary_extracted.json").write_text(json.dumps(["Cancel", "Sales Invoice", "Gone"]))
+    glossary_dir = tmp_bench / "glossaries"
+    _write_glossary(tmp_bench, "sample_app", {"Hello": {"de": {"text": "Servus", "source": "manual"}}})
+
+    priority = ["frappe", "erpnext"]
+    apps = resolve_app_order(discover_bench(tmp_bench), priority)
+    migrate_bench_glossary(tmp_bench, glossary_dir, apps, priority)
+
+    # First app in order whose POT mentions the term; unmatched terms go to the first app
+    assert json.loads((glossary_dir / "frappe.json").read_text()) == {"invoice": {}, "Unknown Term": {}}
+    assert json.loads((glossary_dir / "sample_app.json").read_text()) == {
+        "Hello": {"de": {"text": "Servus", "source": "manual"}}
+    }
+    assert json.loads((tmp_bench / "glossary_extracted.json").read_text()) == {
+        "glossary_dir": str(glossary_dir.resolve()),
+        "apps": {"frappe": ["Sales Invoice"], "sample_app": ["Cancel"]},
+    }
+    assert not (tmp_bench / "glossary.json").exists()
+    assert (tmp_bench / "glossary.json.migrated").exists()
+
+    # Running again is a no-op
+    migrate_bench_glossary(tmp_bench, glossary_dir, apps, priority)
+    assert json.loads((glossary_dir / "frappe.json").read_text()) == {"invoice": {}, "Unknown Term": {}}
+
+
+def test_migration_gives_shared_term_to_each_app_outside_priority(tmp_bench: Path) -> None:
+    _add_app(tmp_bench, "frappe", ["Save"])
+    _add_app(tmp_bench, "app_a", ["Payment Entry"])
+    _add_app(tmp_bench, "app_b", ["New Payment"])
+    (tmp_bench / "glossary.json").write_text(json.dumps({"Payment": {}, "Save": {}}))
+    glossary_dir = tmp_bench / "glossaries"
+
+    priority = ["frappe"]
+    apps = resolve_app_order(discover_bench(tmp_bench), priority)
+    migrate_bench_glossary(tmp_bench, glossary_dir, apps, priority)
+
+    # app_a and app_b are not in each other's chain, so both need the term
+    assert json.loads((glossary_dir / "app_a.json").read_text()) == {"Payment": {}}
+    assert json.loads((glossary_dir / "app_b.json").read_text()) == {"Payment": {}}
+    # A priority app is in every chain, so it is enough there
+    assert json.loads((glossary_dir / "frappe.json").read_text()) == {"Save": {}}
+
+
+async def test_changed_glossary_dir_extracts_terms_again(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = BatchRecordingRunner(_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+    old_dir, new_dir = tmp_bench / "old_glossaries", tmp_bench / "new_glossaries"
+
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, glossary_dir=old_dir, resume=False))
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, glossary_dir=new_dir, resume=False))
+
+    # The extraction cache belongs to old_dir, so the new folder gets its own terms
+    assert json.loads((new_dir / "sample_app.json").read_text()) == json.loads(
+        (old_dir / "sample_app.json").read_text()
+    )

@@ -6,7 +6,7 @@ The guide was written for a Debian 13 server with 2 CPUs, 4 GB RAM and 40 GB dis
 
 ## Why a server and not GitHub Actions
 
-frappe-translator stores its glossary cache and resume state in the bench folder (`glossary.json`, `glossary_extracted.json`, `.frappe-translator-progress.json`). On a server these files stay between runs, so a run that stops at the token limit continues the next night. A GitHub-hosted runner has a 6 hour job limit and starts empty, so you must save and restore these files yourself.
+frappe-translator stores its term extraction cache and resume state in the bench folder (`glossary_extracted.json`, `.frappe-translator-progress.json`). The glossary files are in `glossary_dir` (default `<bench>/glossaries`). Keep them in a git-versioned folder that all benches share, and set `glossary_dir` in the config. On a server these files stay between runs, so a run that stops at the token limit continues the next night. A GitHub-hosted runner has a 6 hour job limit and starts empty, so you must save and restore these files yourself.
 
 ## What the tool needs
 
@@ -95,6 +95,7 @@ Create `~/translate/frappe-translator.toml`. Lower the concurrency to fit 4 GB R
 ```toml
 [general]
 concurrency = 2
+glossary_dir = "/home/<user>/translate/glossaries"  # git checkout, shared by all benches
 ```
 
 ## 6. The script

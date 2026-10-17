@@ -89,7 +89,7 @@ frappe-translator clear-progress /path/to/bench
 
 ### Two-pass pipeline
 
-1. **Pass 1 (term extraction):** Batches all translatable strings and sends them to Claude to extract key domain-specific terms (e.g., "Invoice", "Purchase Order", "DocType"). Existing translations for these terms are looked up across all PO files to build a glossary. This pass is optional (`--skip-glossary`) and cached across runs.
+1. **Pass 1 (term extraction):** Batches the translatable strings of each app and sends them to Claude to extract key domain-specific terms (e.g., "Invoice", "Purchase Order", "DocType"). This pass is optional (`--skip-glossary`) and cached across runs in `<bench>/glossary_extracted.json`. If `glossary_dir` changes, the cache is not used and terms are extracted again. New terms are added to the app's glossary file without a translation. Pass 2 only reads the glossary and never adds terms.
 
 2. **Pass 2 (translation):** Strings are batched (default 50 per call) and sent to Claude with full context:
    - Source code snippets (up to 3 per string, from diverse files)
@@ -98,6 +98,29 @@ frappe-translator clear-progress /path/to/bench
    - Per-language style instructions (formality, address form)
 
    The LLM translates each string into all target languages at once. Failed batches are retried individually.
+
+### Glossary
+
+Each app has an optional glossary file `<glossary_dir>/<app>.json`. The default `glossary_dir` is `<bench>/glossaries`. Change it with `glossary_dir` in `[general]` or with `--glossary-dir`. Use a git-versioned folder that all runs share, so that curated translations are reviewed and kept.
+
+```json
+{
+  "Opening": {
+    "de": {"source": "opus", "text": "Eröffnung"},
+    "fi": {"source": "manual", "text": "Avaus"}
+  },
+  "Party": {}
+}
+```
+
+`source` is `manual`, `opus` or `sonnet`. A term with `{}` was extracted, but has no curated translation yet.
+
+To translate app X, the tool merges the files of the apps in `[apps.order] priority` (if they are in the bench) and then the file of X. For each term and language, the later app wins. Files of other apps are not used. Then:
+
+1. Existing translations from the PO files of all apps fill the term and language pairs that have no file entry. These lookups run on each run and are not written to the glossary files.
+2. Entries from `[terminology.<lang>]` win over all other sources.
+
+Older versions stored one bench-wide `<bench>/glossary.json`. The first run moves its terms into the app files (without translations) and renames it to `glossary.json.migrated`.
 
 ### Key design decisions
 
@@ -124,6 +147,7 @@ concurrency = 5
 batch_size = 50
 timeout = 120
 model = "sonnet"
+glossary_dir = "/path/to/glossaries"  # default: <bench>/glossaries
 
 [style.default]
 formality = "formal"
@@ -146,6 +170,8 @@ priority = ["frappe", "erpnext", "hrms"]
 ```
 
 Pass it with `--config frappe-translator.toml`.
+
+Entries in `[terminology.<lang>]` win over all other glossary sources for that term and language. They are used only for the current run and are not written to the glossary files.
 
 ## Scheduled runs
 

@@ -27,6 +27,7 @@ class TranslatorConfig:
     """Main configuration for the translator."""
 
     bench_path: Path = field(default_factory=lambda: Path("."))
+    glossary_dir: Path | None = None  # default: <bench>/glossaries
     concurrency: int = 5
     batch_size: int = 50
     timeout: int = 120
@@ -48,6 +49,9 @@ class TranslatorConfig:
         """Get style config for a language, falling back to default."""
         return self.style_per_language.get(language, self.style_default)
 
+    def get_glossary_dir(self) -> Path:
+        return self.glossary_dir or self.bench_path / "glossaries"
+
 
 def load_config(path: Path | None) -> TranslatorConfig:
     """Load configuration from a TOML file. Returns defaults if path is None."""
@@ -66,6 +70,8 @@ def load_config(path: Path | None) -> TranslatorConfig:
     config.model = general.get("model", config.model)
     config.checkpoint_interval = general.get("checkpoint_interval", config.checkpoint_interval)
     config.max_retries = general.get("max_retries", config.max_retries)
+    if "glossary_dir" in general:
+        config.glossary_dir = Path(general["glossary_dir"])
 
     run = data.get("run", {})
     config.mode = run.get("mode", config.mode)

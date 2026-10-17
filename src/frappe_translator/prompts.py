@@ -14,7 +14,6 @@ def build_translation_schema(target_languages: list[str]) -> str:
 
     Returns a schema for an object with:
     - translations: array of objects, each with msgid + msgctxt + language translations
-    - terms: object mapping term -> {locale: translation} for glossary enrichment
 
     ``msgctxt`` is required and nullable so the model is forced to echo it back
     verbatim. Two entries can share the same ``msgid`` but differ on ``msgctxt``;
@@ -39,13 +38,6 @@ def build_translation_schema(target_languages: list[str]) -> str:
                     "type": "object",
                     "properties": translation_props,
                     "required": required,
-                },
-            },
-            "terms": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "object",
-                    "additionalProperties": {"type": "string"},
                 },
             },
         },
@@ -163,9 +155,6 @@ def build_translation_prompt(
             "",
             "## Target Languages",
             ", ".join(target_languages),
-            "",
-            "In the terms field, include any business terms, UI actions, DocType names, and"
-            " technical terms you translated that should stay consistent across the application.",
         ]
     )
 
@@ -254,13 +243,5 @@ def build_batch_translation_prompt(
             lines.append(f"Source context:\n{entry_info['snippets_text']}")
         elif entry_info.get("source_files"):
             lines.append(f"Source: {', '.join(entry_info['source_files'])}")
-
-    lines.extend(
-        [
-            "",
-            "In the terms field, include any business terms, UI actions, DocType names, and"
-            " technical terms you translated that should stay consistent across the application.",
-        ]
-    )
 
     return "\n".join(lines)

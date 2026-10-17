@@ -23,6 +23,7 @@ def atomic_json_write(path: Path, data: object, **kwargs: Any) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, **kwargs)
+            f.write("\n")
         os.replace(tmp, str(path))
     except BaseException:
         with contextlib.suppress(OSError):
