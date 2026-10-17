@@ -90,7 +90,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     pot_cache: dict[str, list[TranslationEntry]] = {}
 
     glossary_dir = config.get_glossary_dir()
-    migrate_bench_glossary(bench_path, glossary_dir, all_apps_ordered)
+    migrate_bench_glossary(bench_path, glossary_dir, all_apps_ordered, config.app_priority)
     app_names = {app.name for app in all_apps_ordered}
     files = {name: load_glossary_file(glossary_dir, name) for name in app_names}
 

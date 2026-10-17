@@ -114,8 +114,9 @@ def test_migrates_bench_wide_glossary_to_app_files(tmp_bench: Path) -> None:
     glossary_dir = tmp_bench / "glossaries"
     _write_glossary(tmp_bench, "sample_app", {"Hello": {"de": {"text": "Servus", "source": "manual"}}})
 
-    apps = resolve_app_order(discover_bench(tmp_bench), ["frappe", "erpnext"])
-    migrate_bench_glossary(tmp_bench, glossary_dir, apps)
+    priority = ["frappe", "erpnext"]
+    apps = resolve_app_order(discover_bench(tmp_bench), priority)
+    migrate_bench_glossary(tmp_bench, glossary_dir, apps, priority)
 
     # First app in order whose POT mentions the term; unmatched terms go to the first app
     assert json.loads((glossary_dir / "frappe.json").read_text()) == {"invoice": {}, "Unknown Term": {}}
@@ -130,5 +131,23 @@ def test_migrates_bench_wide_glossary_to_app_files(tmp_bench: Path) -> None:
     assert (tmp_bench / "glossary.json.migrated").exists()
 
     # Running again is a no-op
-    migrate_bench_glossary(tmp_bench, glossary_dir, apps)
+    migrate_bench_glossary(tmp_bench, glossary_dir, apps, priority)
     assert json.loads((glossary_dir / "frappe.json").read_text()) == {"invoice": {}, "Unknown Term": {}}
+
+
+def test_migration_gives_shared_term_to_each_app_outside_priority(tmp_bench: Path) -> None:
+    _add_app(tmp_bench, "frappe", ["Save"])
+    _add_app(tmp_bench, "app_a", ["Payment Entry"])
+    _add_app(tmp_bench, "app_b", ["New Payment"])
+    (tmp_bench / "glossary.json").write_text(json.dumps({"Payment": {}, "Save": {}}))
+    glossary_dir = tmp_bench / "glossaries"
+
+    priority = ["frappe"]
+    apps = resolve_app_order(discover_bench(tmp_bench), priority)
+    migrate_bench_glossary(tmp_bench, glossary_dir, apps, priority)
+
+    # app_a and app_b are not in each other's chain, so both need the term
+    assert json.loads((glossary_dir / "app_a.json").read_text()) == {"Payment": {}}
+    assert json.loads((glossary_dir / "app_b.json").read_text()) == {"Payment": {}}
+    # A priority app is in every chain, so it is enough there
+    assert json.loads((glossary_dir / "frappe.json").read_text()) == {"Save": {}}

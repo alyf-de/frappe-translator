@@ -56,10 +56,10 @@ def merge_chain(files: dict[str, GlossaryFile], chain: list[str]) -> dict[str, d
     return merged
 
 
-def migrate_bench_glossary(bench_path: Path, glossary_dir: Path, apps: list[AppInfo]) -> None:
+def migrate_bench_glossary(bench_path: Path, glossary_dir: Path, apps: list[AppInfo], priority: list[str]) -> None:
     """One-time migration from the old bench-wide glossary files.
 
-    ``apps`` are all discovered apps, in ``resolve_app_order`` order.
+    ``apps`` are all discovered apps, in ``resolve_app_order(apps, priority)`` order.
     """
     extracted_path = bench_path / "glossary_extracted.json"
     old_glossary_path = bench_path / "glossary.json"
@@ -82,10 +82,13 @@ def migrate_bench_glossary(bench_path: Path, glossary_dir: Path, apps: list[AppI
         files: dict[str, GlossaryFile] = {}
         for term in old_terms:
             pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
-            owner = next((app for app, text in pot_texts.items() if pattern.search(text)), apps[0].name)
-            if owner not in files:
-                files[owner] = load_glossary_file(glossary_dir, owner)
-            files[owner].setdefault(term, {})
+            matches = [app for app, text in pot_texts.items() if pattern.search(text)] or [apps[0].name]
+            # A priority app is in every chain; other apps don't see each other's files.
+            owners = matches[:1] if matches[0] in priority else matches
+            for owner in owners:
+                if owner not in files:
+                    files[owner] = load_glossary_file(glossary_dir, owner)
+                files[owner].setdefault(term, {})
         for app, data in files.items():
             save_glossary_file(glossary_dir, app, data)
         migrated_path = old_glossary_path.with_name("glossary.json.migrated")
