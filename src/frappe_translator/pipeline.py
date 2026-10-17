@@ -221,15 +221,22 @@ async def _translate_glossary_terms(
     todo_items = list(todo.items())
     batches = [dict(todo_items[i : i + config.batch_size]) for i in range(0, len(todo_items), config.batch_size)]
 
-    async def run_one(batch: dict[str, list[str]]) -> tuple[dict[str, list[str]], str | None]:
+    def build_prompt(batch: dict[str, list[str]]) -> str:
         items = []
         for term, missing in batch.items():
             pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
             examples = list(islice((m for m in msgids if pattern.search(m)), 3))
             hints = {lang: text for lang, text in po_hints[term].items() if lang in missing}
             items.append({"term": term, "languages": missing, "examples": examples, "hints": hints})
+        return build_glossary_prompt(items)
+
+    # Build all prompts before the first subprocess starts: this blocking work would otherwise
+    # delay writing to a started `claude` process, which exits after 3s without stdin.
+    prompts = [build_prompt(batch) for batch in batches]
+
+    async def run_one(batch: dict[str, list[str]], prompt: str) -> tuple[dict[str, list[str]], str | None]:
         try:
-            raw = await runner.run(build_glossary_prompt(items), json_schema=build_glossary_schema(batch))
+            raw = await runner.run(prompt, json_schema=build_glossary_schema(batch))
         except Exception as e:
             logger.error("Glossary %s: batch failed: %s", app.name, e)
             raw = None
@@ -237,7 +244,9 @@ async def _translate_glossary_terms(
 
     glossary_dir = config.get_glossary_dir()
     failed = 0
-    for next_done in asyncio.as_completed([run_one(batch) for batch in batches]):
+    for next_done in asyncio.as_completed(
+        [run_one(batch, prompt) for batch, prompt in zip(batches, prompts, strict=True)]
+    ):
         batch, raw = await next_done
         if raw is None:
             failed += 1
