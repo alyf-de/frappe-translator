@@ -81,6 +81,8 @@ Add `--seed` to also add all DocType names and a short list of core Frappe terms
 frappe-translator glossary /path/to/bench --model opus --seed
 ```
 
+The seed runs Pass 1 on all strings. To extract the terms with a cheaper model, add `--extract-model haiku`. `--model` then only sets the model for the term translations.
+
 The command runs Pass 1 first. `--app`, `--language` and `--exclude-language` work as for `translate`. See [Glossary](#glossary).
 
 ### Check translation coverage
@@ -167,6 +169,7 @@ concurrency = 5
 batch_size = 50
 timeout = 120
 model = "sonnet"
+extract_model = "haiku"  # Pass 1 term extraction; default: model
 glossary_dir = "/path/to/glossaries"  # default: <bench>/glossaries
 
 [style.default]

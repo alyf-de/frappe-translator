@@ -32,6 +32,7 @@ class TranslatorConfig:
     batch_size: int = 50
     timeout: int = 120
     model: str | None = None
+    extract_model: str | None = None  # Pass 1; default: model
     mode: str = "fill-missing"
     resume: bool = True
     skip_glossary: bool = False
@@ -68,6 +69,7 @@ def load_config(path: Path | None) -> TranslatorConfig:
     config.batch_size = general.get("batch_size", config.batch_size)
     config.timeout = general.get("timeout", config.timeout)
     config.model = general.get("model", config.model)
+    config.extract_model = general.get("extract_model", config.extract_model)
     config.checkpoint_interval = general.get("checkpoint_interval", config.checkpoint_interval)
     config.max_retries = general.get("max_retries", config.max_retries)
     if "glossary_dir" in general:

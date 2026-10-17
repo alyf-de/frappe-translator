@@ -100,7 +100,7 @@ model = "haiku"
 glossary_dir = "/home/<user>/translate/glossaries"  # git checkout, shared by all benches
 ```
 
-Without `model`, the tool uses the default model of your Claude Code account. `model` sets the model for both passes. See [docs/model-comparison.md](model-comparison.md) for the quality difference between Haiku and Sonnet.
+Without `model`, the tool uses the default model of your Claude Code account. `model` sets the model for both passes, unless you also set `extract_model` for pass 1. See [docs/model-comparison.md](model-comparison.md) for the quality difference between Haiku and Sonnet.
 
 ## 6. Seed the glossaries
 
@@ -110,12 +110,12 @@ Do this one time, before the first scheduled run. `--seed` adds all DocType name
 source ~/.translate.env
 for BENCH in ~/translate/*/; do
   [ -d "$BENCH/apps" ] || continue
-  frappe-translator glossary "$BENCH" --model opus --seed --config ~/translate/frappe-translator.toml
+  frappe-translator glossary "$BENCH" --model opus --extract-model haiku --seed --config ~/translate/frappe-translator.toml
 done
 cd ~/translate/glossaries && git add -A && git commit -m "chore: seed glossaries" && git push
 ```
 
-The loop seeds all benches, because some DocTypes exist only on one branch. Existing entries are kept, so you can run the seed again later.
+`--extract-model haiku` uses Haiku to find the terms in all strings, and Opus only translates the terms. The loop seeds all benches, because some DocTypes exist only on one branch. Existing entries are kept, so you can run the seed again later.
 
 ## 7. The script
 

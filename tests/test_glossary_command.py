@@ -94,6 +94,21 @@ async def test_seed_adds_doctype_names_and_core_terms(tmp_bench: Path, monkeypat
     }
 
 
+async def test_extract_model_runs_pass_1(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runners: dict[str | None, BatchRecordingRunner] = {}
+
+    def make_runner(model: str | None, **_: object) -> BatchRecordingRunner:
+        return runners.setdefault(model, BatchRecordingRunner(_response))
+
+    monkeypatch.setattr(pipeline, "ClaudeRunner", make_runner)
+    config = TranslatorConfig(bench_path=tmp_bench, model="opus", extract_model="haiku")
+    await pipeline.run_glossary(config, "opus")
+
+    assert runners["haiku"].calls
+    assert all(schema is None for _, schema in runners["haiku"].calls)
+    assert all(schema is not None for _, schema in runners["opus"].calls)
+
+
 def test_cli_rejects_other_models(tmp_bench: Path) -> None:
     result = CliRunner().invoke(main, ["glossary", str(tmp_bench), "--model", "haiku"])
     assert result.exit_code == 2

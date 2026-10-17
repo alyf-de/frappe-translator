@@ -74,6 +74,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
         model=config.model,
         timeout=config.timeout,
     )
+    extract_runner = _extract_runner(config)
     progress = ProgressTracker(bench_path, max_retries=config.max_retries)
     if config.resume:
         progress.load()
@@ -104,7 +105,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
 
     # Pass 1: extract terms per app; new terms go into that app's glossary file as {}
     if not config.skip_glossary:
-        await extract_new_terms(config, apps, files, runner, pot_cache)
+        await extract_new_terms(config, apps, files, extract_runner, pot_cache)
 
     # Runtime glossary per app: merged chain files, then PO lookups fill gaps, then [terminology] wins.
     # PO lookups are not written back; they are recomputed each run.
@@ -171,7 +172,7 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
                 save_glossary_file(glossary_dir, name, files[name])
 
     pot_cache: dict[str, list[TranslationEntry]] = {}
-    await extract_new_terms(config, apps, files, runner, pot_cache)
+    await extract_new_terms(config, apps, files, _extract_runner(config), pot_cache)
 
     all_terms = sorted({term for app in apps for term in files[app.name]})
     po_hints = lookup_terms_batch(all_terms, {app.name: app.po_paths for app in all_apps_ordered})
@@ -267,6 +268,11 @@ async def _translate_glossary_terms(
         save_glossary_file(glossary_dir, app.name, terms)
         logger.info("Glossary %s: wrote %d translations", app.name, written)
     return failed
+
+
+def _extract_runner(config: TranslatorConfig) -> ClaudeRunner:
+    model = config.extract_model or config.model
+    return ClaudeRunner(concurrency=config.concurrency, model=model, timeout=config.timeout)
 
 
 async def extract_new_terms(

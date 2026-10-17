@@ -46,6 +46,7 @@ def main() -> None:
 @click.option("--batch-size", type=int, default=50, help="Strings per batch")
 @click.option("--timeout", type=int, default=120, help="Timeout per claude call in seconds")
 @click.option("--model", type=str, default=None, help="Claude model to use (e.g., sonnet, opus)")
+@click.option("--extract-model", type=str, default=None, help="Claude model for Pass 1 (default: --model)")
 @click.option("--resume/--no-resume", default=True, help="Resume from previous progress")
 @click.option("--dry-run", is_flag=True, help="Show what would be translated without running")
 @click.option(
@@ -69,6 +70,7 @@ def translate(
     batch_size: int,
     timeout: int,
     model: str | None,
+    extract_model: str | None,
     resume: bool,
     dry_run: bool,
     glossary_dir: Path | None,
@@ -101,6 +103,8 @@ def translate(
         cfg.timeout = timeout
     if model is not None:
         cfg.model = model
+    if extract_model is not None:
+        cfg.extract_model = extract_model
     if glossary_dir is not None:
         cfg.glossary_dir = glossary_dir
     if source("resume") != click.core.ParameterSource.DEFAULT:
@@ -130,6 +134,7 @@ def translate(
 @main.command()
 @click.argument("bench_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--model", required=True, help="Claude model: sonnet or opus. Sets the source of written entries.")
+@click.option("--extract-model", type=str, default=None, help="Claude model for Pass 1 (default: --model)")
 @click.option("--seed", is_flag=True, help="Add DocType names and core Frappe terms to the glossary files first")
 @click.option("--config", "-c", type=click.Path(exists=True, path_type=Path), default=None, help="Config TOML file")
 @click.option("--app", "-a", multiple=True, help="App to build the glossary for (repeatable, default: all)")
@@ -150,6 +155,7 @@ def glossary(
     ctx: click.Context,
     bench_path: Path,
     model: str,
+    extract_model: str | None,
     seed: bool,
     config: Path | None,
     app: tuple[str, ...],
@@ -177,6 +183,8 @@ def glossary(
     cfg = load_config(config)
     cfg.bench_path = bench_path
     cfg.model = model
+    if extract_model is not None:
+        cfg.extract_model = extract_model
     if app:
         cfg.apps = list(app)
     if language:
