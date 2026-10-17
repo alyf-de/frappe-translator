@@ -198,10 +198,13 @@ def glossary(
     from frappe_translator.pipeline import run_glossary
 
     try:
-        asyncio.run(run_glossary(cfg, tier, seed))
+        failed = asyncio.run(run_glossary(cfg, tier, seed))
     except KeyboardInterrupt:
         click.echo("\nInterrupted. The glossary files are saved after each batch.", err=True)
         sys.exit(130)
+    if failed:
+        click.echo(f"{failed} glossary batches failed. Run again to retry them.", err=True)
+        sys.exit(1)
 
 
 @main.command()

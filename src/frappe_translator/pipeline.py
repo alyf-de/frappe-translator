@@ -143,15 +143,17 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     return summary
 
 
-async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) -> None:
+async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) -> int:
     """Translate the terms of each app's glossary file and write them with ``source`` = ``tier``.
+
+    Returns the number of failed batches.
 
     A (term, lang) pair is written only if it has no entry or its source ranks lower than ``tier``.
     """
     all_apps = discover_bench(config.bench_path)
     if not all_apps:
         logger.error("No apps with POT files found in %s", config.bench_path)
-        return
+        return 0
     all_apps_ordered = resolve_app_order(all_apps, config.app_priority)
     apps = [a for a in all_apps_ordered if a.name in config.apps] if config.apps else all_apps_ordered
     target_languages = get_target_languages(apps, config.languages or None, config.exclude_languages)
@@ -173,8 +175,9 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
 
     all_terms = sorted({term for app in apps for term in files[app.name]})
     po_hints = lookup_terms_batch(all_terms, {app.name: app.po_paths for app in all_apps_ordered})
+    failed = 0
     for app in apps:
-        await _translate_glossary_terms(
+        failed += await _translate_glossary_terms(
             app,
             files[app.name],
             get_app_languages(app, target_languages),
@@ -184,6 +187,7 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
             runner,
             config,
         )
+    return failed
 
 
 async def _translate_glossary_terms(
@@ -195,8 +199,11 @@ async def _translate_glossary_terms(
     po_hints: dict[str, dict[str, str]],
     runner: ClaudeRunner,
     config: TranslatorConfig,
-) -> None:
-    """Translate the open pairs of one app's glossary file; save the file after each batch."""
+) -> int:
+    """Translate the open pairs of one app's glossary file; save the file after each batch.
+
+    Returns the number of failed batches.
+    """
     rank = SOURCE_RANK[tier]
     todo: dict[str, list[str]] = {}
     for term, translations in terms.items():
@@ -207,7 +214,7 @@ async def _translate_glossary_terms(
             todo[term] = missing
     logger.info("Glossary %s: %d terms to translate", app.name, len(todo))
     if not todo:
-        return
+        return 0
 
     msgids = [entry.msgid for entry in entries]
     todo_items = list(todo.items())
@@ -228,9 +235,11 @@ async def _translate_glossary_terms(
         return batch, raw
 
     glossary_dir = config.get_glossary_dir()
+    failed = 0
     for next_done in asyncio.as_completed([run_one(batch) for batch in batches]):
         batch, raw = await next_done
         if raw is None:
+            failed += 1
             continue
         try:
             data = parse_claude_json(raw)
@@ -241,6 +250,7 @@ async def _translate_glossary_terms(
                 raise ValueError(f"expected an object for terms, got {type(result).__name__}")
         except (ValueError, KeyError) as e:
             logger.warning("Glossary %s: failed to parse response: %s", app.name, e)
+            failed += 1
             continue
         written = 0
         for term, texts in result.items():
@@ -256,6 +266,7 @@ async def _translate_glossary_terms(
                 written += 1
         save_glossary_file(glossary_dir, app.name, terms)
         logger.info("Glossary %s: wrote %d translations", app.name, written)
+    return failed
 
 
 async def extract_new_terms(

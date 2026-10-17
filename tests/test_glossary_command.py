@@ -98,3 +98,14 @@ def test_cli_rejects_other_models(tmp_bench: Path) -> None:
     result = CliRunner().invoke(main, ["glossary", str(tmp_bench), "--model", "haiku"])
     assert result.exit_code == 2
     assert "sonnet or opus" in result.output
+
+
+async def test_failed_batches_are_counted(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_glossary(tmp_bench, "sample_app", {"Hello": {}})
+    runner = BatchRecordingRunner(lambda _prompt, schema: json.dumps({"terms": []}) if schema is None else "not json")
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    failed = await pipeline.run_glossary(TranslatorConfig(bench_path=tmp_bench, model="sonnet"), "sonnet")
+
+    assert failed == 1
+    assert _read(tmp_bench, "sample_app") == {"Hello": {}}
