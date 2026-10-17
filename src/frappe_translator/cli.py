@@ -48,6 +48,12 @@ def main() -> None:
 @click.option("--model", type=str, default=None, help="Claude model to use (e.g., sonnet, opus)")
 @click.option("--resume/--no-resume", default=True, help="Resume from previous progress")
 @click.option("--dry-run", is_flag=True, help="Show what would be translated without running")
+@click.option(
+    "--glossary-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Folder with per-app glossary files (default: <bench>/glossaries)",
+)
 @click.option("--skip-glossary", is_flag=True, help="Skip Pass 1 term extraction (single-pass mode)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.pass_context
@@ -65,6 +71,7 @@ def translate(
     model: str | None,
     resume: bool,
     dry_run: bool,
+    glossary_dir: Path | None,
     skip_glossary: bool,
     verbose: bool,
 ) -> None:
@@ -94,6 +101,8 @@ def translate(
         cfg.timeout = timeout
     if model is not None:
         cfg.model = model
+    if glossary_dir is not None:
+        cfg.glossary_dir = glossary_dir
     if source("resume") != click.core.ParameterSource.DEFAULT:
         cfg.resume = resume
     if source("skip_glossary") != click.core.ParameterSource.DEFAULT:

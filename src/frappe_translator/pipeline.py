@@ -10,6 +10,13 @@ from frappe_translator._io import atomic_json_write
 from frappe_translator.claude_runner import ClaudeRunner
 from frappe_translator.context_assembler import assemble_contexts
 from frappe_translator.discovery import discover_bench, get_app_languages, get_target_languages, resolve_app_order
+from frappe_translator.glossary import (
+    app_chain,
+    load_glossary_file,
+    merge_chain,
+    migrate_bench_glossary,
+    save_glossary_file,
+)
 from frappe_translator.models import TermGlossary, TranslationEntry
 from frappe_translator.po_handler import (
     POWriter,
@@ -40,7 +47,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
         logger.error("No apps with POT files found in %s", bench_path)
         return summary
 
-    # Keep full app list for glossary building (cross-app term consistency),
+    # Keep full app list for PO term lookup and the glossary chain,
     # but only translate the filtered subset.
     all_apps_ordered = resolve_app_order(all_apps, config.app_priority)
     apps = [a for a in all_apps_ordered if a.name in config.apps] if config.apps else all_apps_ordered
@@ -82,67 +89,55 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     # Cache for POT entries to avoid re-parsing in _process_app
     pot_cache: dict[str, list[TranslationEntry]] = {}
 
-    # Pass 1: Build a single bench-wide glossary from ALL apps (not just filtered ones)
-    glossary = TermGlossary()
-    glossary_path = config.bench_path / "glossary.json"
-    extracted_path = config.bench_path / "glossary_extracted.json"
+    glossary_dir = config.get_glossary_dir()
+    migrate_bench_glossary(bench_path, glossary_dir, all_apps_ordered)
+    app_names = {app.name for app in all_apps_ordered}
+    files = {name: load_glossary_file(glossary_dir, name) for name in app_names}
 
-    # Always load existing glossary (Pass 2 enriches it even with --skip-glossary)
-    if glossary_path.exists():
-        with open(glossary_path) as f:
-            existing = json.load(f)
-        if isinstance(existing, dict):
-            glossary.terms.update(existing)
-            logger.info("Loaded existing glossary with %d terms", len(glossary.terms))
-
+    # Pass 1: extract terms per app; new terms go into that app's glossary file as {}
     if not config.skip_glossary:
-        # Load set of msgids already processed for term extraction
-        extracted_msgids: set[str] = set()
-        if extracted_path.exists():
-            with open(extracted_path) as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                extracted_msgids = {str(x) for x in data}
+        extracted_path = bench_path / "glossary_extracted.json"
+        extracted: dict[str, list[str]] = json.loads(extracted_path.read_text()) if extracted_path.exists() else {}
 
-        # Extract terms only from the apps being translated (not all bench apps).
-        # Term translations are still looked up across ALL apps' PO files.
-        # Cache POT entries so _process_app doesn't re-parse them.
-        all_entries = []
         for app in apps:
+            # Cache POT entries so _process_app doesn't re-parse them.
             entries = read_pot_entries(app.pot_path)
             pot_cache[app.name] = entries
-            all_entries.extend(e for e in entries if not e.is_plural)
+            done = set(extracted.get(app.name, []))
+            non_plural = [e for e in entries if not e.is_plural]
+            uncovered = [e for e in non_plural if e.msgid not in done]
+            logger.info("Pass 1 %s: %d/%d entries need term extraction", app.name, len(uncovered), len(non_plural))
+            if not uncovered:
+                continue
 
-        uncovered = [e for e in all_entries if e.msgid not in extracted_msgids]
-        logger.info(
-            "Pass 1: %d/%d entries need term extraction (%d already extracted)",
-            len(uncovered),
-            len(all_entries),
-            len(all_entries) - len(uncovered),
-        )
+            extracted_terms = await extract_terms(uncovered, runner, config.batch_size)
+            chain = app_chain(app.name, app_names, config.app_priority)
+            new_terms = [t for t in extracted_terms.terms if not any(t in files[a] for a in chain)]
+            if new_terms:
+                for term in new_terms:
+                    files[app.name][term] = {}
+                save_glossary_file(glossary_dir, app.name, files[app.name])
+                logger.info("%s: added %d new terms to %s", app.name, len(new_terms), glossary_dir)
 
-        new_terms: list[str] = []
-        if uncovered:
-            new_glossary = await extract_terms(uncovered, runner, config.batch_size)
-            # Merge new terms into existing glossary
-            for term in new_glossary.terms:
-                if term not in glossary.terms:
-                    glossary.terms[term] = {}
-                    new_terms.append(term)
-            # Mark these entries as extracted
-            extracted_msgids.update(e.msgid for e in uncovered)
+            extracted[app.name] = sorted(done | {e.msgid for e in uncovered})
+            atomic_json_write(extracted_path, extracted)
 
-        # Look up translations only for newly extracted terms
-        if new_terms:
-            logger.info("Looking up translations for %d new terms", len(new_terms))
-            batch_results = lookup_terms_batch(new_terms, all_po_paths)
-            for term, translations in batch_results.items():
-                glossary.terms[term] = translations
-
-        # Persist glossary and extracted set
-        atomic_json_write(glossary_path, glossary.terms, indent=2)
-        atomic_json_write(extracted_path, sorted(extracted_msgids))
-        logger.info("Glossary saved to %s (%d terms)", glossary_path, len(glossary.terms))
+    # Runtime glossary per app: merged chain files, then PO lookups fill gaps, then [terminology] wins.
+    # PO lookups are not written back; they are recomputed each run.
+    merged = {app.name: merge_chain(files, app_chain(app.name, app_names, config.app_priority)) for app in apps}
+    all_terms = sorted({term for terms in merged.values() for term in terms})
+    po_lookup = lookup_terms_batch(all_terms, all_po_paths)
+    glossaries: dict[str, TermGlossary] = {}
+    for app in apps:
+        terms = merged[app.name]
+        for term, langs in terms.items():
+            for lang, text in po_lookup[term].items():
+                langs.setdefault(lang, text)
+        for lang, overlay in config.terminology.items():
+            for term, text in overlay.items():
+                terms.setdefault(term, {})[lang] = text
+        glossaries[app.name] = TermGlossary(terms=terms)
+        logger.info("%s: glossary with %d terms", app.name, len(terms))
 
     # Process each app in dependency order (Pass 2 only)
     for app in apps:
@@ -154,16 +149,10 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             progress=progress,
             target_languages=target_languages,
             style_config=style_config,
-            glossary=glossary,
-            glossary_path=glossary_path,
+            glossary=glossaries[app.name],
             pot_cache=pot_cache,
         )
         summary.app_results[app.name] = app_results
-
-    # Save glossary with any new terms discovered during Pass 2
-    if glossary.terms:
-        atomic_json_write(glossary_path, glossary.terms, indent=2)
-        logger.info("Glossary updated: %d terms", len(glossary.terms))
 
     # Print summary
     summary.log_summary()
@@ -178,7 +167,6 @@ async def _process_app(
     target_languages: list[str],
     style_config: dict,
     glossary: TermGlossary,
-    glossary_path: Path | None = None,
     pot_cache: dict[str, list[TranslationEntry]] | None = None,
 ) -> AppResult:
     """Process a single app through the full pipeline."""
@@ -255,7 +243,7 @@ async def _process_app(
     if not entries:
         return result
 
-    # Context assembly (using bench-wide glossary)
+    # Context assembly (using the app's chain glossary)
     logger.info("%s: Assembling contexts...", app.name)
     contexts = assemble_contexts(
         entries=entries,
@@ -275,8 +263,6 @@ async def _process_app(
         app_name=app.name,
         target_languages=app_languages,
         style_config=app_style_config,
-        glossary=glossary,
-        glossary_path=glossary_path,
         checkpoint_interval=config.checkpoint_interval,
         batch_size=config.batch_size,
     )
