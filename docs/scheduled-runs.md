@@ -112,7 +112,7 @@ for BENCH in ~/translate/*/; do
   [ -d "$BENCH/apps" ] || continue
   frappe-translator glossary "$BENCH" --model opus --seed --config ~/translate/frappe-translator.toml
 done
-cd ~/translate/glossaries && git add -A && git commit -m "chore: seed glossaries"
+cd ~/translate/glossaries && git add -A && git commit -m "chore: seed glossaries" && git push
 ```
 
 The loop seeds all benches, because some DocTypes exist only on one branch. Existing entries are kept, so you can run the seed again later.
@@ -173,10 +173,31 @@ Run `crontab -e` and add:
 
 `flock` prevents a new run from starting while the previous one is still active.
 
-To fill the glossary with Sonnet once a month, add a second line. It runs one hour before the nightly job and uses the same lock, so the nightly job skips that night if the glossary run takes longer. Use one bench, because all benches share `glossary_dir`. Commit the changed glossary files to their git repository after the run.
+To fill the glossary with Sonnet once a month, save this script as `~/translate/update-glossary.sh` and run `chmod +x` on it. It uses one bench, because all benches share `glossary_dir`. Then it commits the changed glossary files and pushes them directly:
+
+```bash
+#!/usr/bin/env bash
+set -uo pipefail
+export PATH="$HOME/.local/bin:$PATH"   # cron has a minimal PATH
+source ~/.translate.env
+
+cd ~/translate/glossaries || exit 1
+git pull --ff-only || exit 1   # get manual edits first, so the push does not conflict
+
+# A run that stops at the token limit has saved its finished batches, so commit them too
+frappe-translator glossary ~/translate/develop --model sonnet --config ~/translate/frappe-translator.toml
+STATUS=$?
+
+git add -A
+git diff --cached --quiet || git commit -m "chore: update glossaries"
+git push
+exit $STATUS
+```
+
+Add a second cron line. It runs one hour before the nightly job and uses the same lock, so the nightly job skips that night if the glossary run takes longer.
 
 ```cron
-0 0 1 * * flock /tmp/translate.lock bash -c 'export PATH="$HOME/.local/bin:$PATH" && source ~/.translate.env && frappe-translator glossary ~/translate/develop --model sonnet --config ~/translate/frappe-translator.toml' >> ~/translate/glossary.log 2>&1
+0 0 1 * * flock /tmp/translate.lock ~/translate/update-glossary.sh >> ~/translate/glossary.log 2>&1
 ```
 
 ## First run
