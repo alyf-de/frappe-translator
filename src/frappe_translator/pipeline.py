@@ -300,6 +300,8 @@ async def _translate_glossary_terms(
             failed += 1
             continue
         written = 0
+        written_terms: set[str] = set()
+        written_langs: set[str] = set()
         for term, texts in result.items():
             if term not in batch or not isinstance(texts, dict):
                 logger.warning("Glossary %s: skipping %r: %r", app.name, term, texts)
@@ -311,8 +313,16 @@ async def _translate_glossary_terms(
                     continue
                 terms[term][lang] = {"text": text, "source": tier}
                 written += 1
+                written_terms.add(term)
+                written_langs.add(lang)
         save_glossary_file(glossary_dir, app.name, terms)
-        logger.info("Glossary %s: wrote %d translations", app.name, written)
+        logger.info(
+            "Glossary %s: updated %d terms in %d languages (%d translations)",
+            app.name,
+            len(written_terms),
+            len(written_langs),
+            written,
+        )
     return failed
 
 
