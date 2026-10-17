@@ -54,7 +54,8 @@ def extract_snippets(
     snippets: list[SourceSnippet] = []
     for ref in entry.source_refs:
         if ":" not in ref:
-            logger.warning("Skipping malformed source ref (no colon): %r", ref)
+            # Older Frappe versions write JSON refs without a line number
+            logger.debug("Skipping source ref without line number: %r", ref)
             continue
         file_part, _, line_part = ref.rpartition(":")
         try:
