@@ -96,10 +96,28 @@ Create `~/translate/frappe-translator.toml`. Lower the concurrency to fit 4 GB R
 ```toml
 [general]
 concurrency = 2
+model = "haiku"
 glossary_dir = "/home/<user>/translate/glossaries"  # git checkout, shared by all benches
 ```
 
-## 6. The script
+Without `model`, the tool uses the default model of your Claude Code account. `model` sets the model for both passes. See [docs/model-comparison.md](model-comparison.md) for the quality difference between Haiku and Sonnet.
+
+## 6. Seed the glossaries
+
+Do this one time, before the first scheduled run. `--seed` adds all DocType names and a short list of core Frappe terms to the glossary files. Then the command translates all terms that do not have a translation:
+
+```bash
+source ~/.translate.env
+for BENCH in ~/translate/*/; do
+  [ -d "$BENCH/apps" ] || continue
+  frappe-translator glossary "$BENCH" --model opus --seed --config ~/translate/frappe-translator.toml
+done
+cd ~/translate/glossaries && git add -A && git commit -m "chore: seed glossaries"
+```
+
+The loop seeds all benches, because some DocTypes exist only on one branch. Existing entries are kept, so you can run the seed again later.
+
+## 7. The script
 
 Save as `~/translate/translate-all.sh` and run `chmod +x` on it:
 
@@ -145,7 +163,7 @@ Notes:
 - `frappe/frappe` and `frappe/erpnext` may manage translations through Crowdin. Find out if they accept direct `.po` pull requests before you include them.
 - If your fork is in a different organization, `gh pr create` may need `--head <your-fork-org>:$BRANCH`.
 
-## 7. Schedule
+## 8. Schedule
 
 Run `crontab -e` and add:
 
