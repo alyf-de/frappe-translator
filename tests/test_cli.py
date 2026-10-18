@@ -134,3 +134,18 @@ class TestDryRunPerAppLocales:
         assert "1 locales [fr]" in app_full_line
         # app_de_only has no fr.po, so it has no writable locales for this run.
         assert "0 locales [none]" in app_de_line
+
+
+class TestBackfill:
+    def test_copies_translations_between_benches(self, tmp_path: Path) -> None:
+        for bench, msgstr in [("develop", "Speichern"), ("hotfix", "")]:
+            locale = tmp_path / bench / "apps" / "app" / "app" / "locale"
+            locale.mkdir(parents=True)
+            (locale / "main.pot").write_text('msgid "Save"\nmsgstr ""\n')
+            (locale / "de.po").write_text(f'msgid "Save"\nmsgstr "{msgstr}"\n')
+
+        result = CliRunner().invoke(main, ["backfill", str(tmp_path / "develop"), str(tmp_path / "hotfix")])
+
+        assert result.exit_code == 0, result.output
+        assert "app de: 1 translations copied" in result.output
+        assert 'msgstr "Speichern"' in (tmp_path / "hotfix/apps/app/app/locale/de.po").read_text()

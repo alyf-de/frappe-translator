@@ -39,6 +39,26 @@ def _patch_msgstrs(text: str, updates: dict[tuple[str, str | None], str]) -> tup
     return text, patched
 
 
+def _patch_po_file(path: Path, updates: dict[tuple[str, str | None], str]) -> set[tuple[str, str | None]]:
+    # newline="" keeps the line endings exactly as they are
+    with path.open(encoding="utf-8", newline="") as f:
+        text, patched = _patch_msgstrs(f.read(), updates)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    return patched
+
+
+def backfill_po(source: Path, target: Path) -> int:
+    """Copy translations from ``source`` into the empty msgstrs of ``target``; return the number copied."""
+    source_translations = read_po_translations(source)
+    updates = {
+        key: source_translations[key]
+        for key, msgstr in read_po_translations(target).items()
+        if not msgstr and source_translations.get(key)
+    }
+    return len(_patch_po_file(target, updates)) if updates else 0
+
+
 def _patch_entry(block: str, updates: dict[tuple[str, str | None], str], patched: set[tuple[str, str | None]]) -> str:
     lines = block.split("\n")
     # keyword -> (first line, end line) of the keyword line and its continuation lines
@@ -281,11 +301,7 @@ class POWriter:
                 updates[(msgid, msgctxt)] = translated_str
             else:
                 logger.debug("Entry not found in %s: msgid=%r msgctxt=%r", po_path, msgid, msgctxt)
-        # newline="" keeps the line endings exactly as they are
-        with po_path.open(encoding="utf-8", newline="") as f:
-            text, patched = _patch_msgstrs(f.read(), updates)
-        with po_path.open("w", encoding="utf-8", newline="") as f:
-            f.write(text)
+        patched = _patch_po_file(po_path, updates)
         for msgid, msgctxt in updates.keys() - patched:
             logger.warning("Could not write to %s: msgid=%r msgctxt=%r", po_path, msgid, msgctxt)
 

@@ -87,6 +87,14 @@ The command runs Pass 1 first. `--app`, `--language` and `--exclude-language` wo
 
 The command only runs the slower Sonnet and Opus models, so it sends 10 terms per call and waits up to 600 seconds. It ignores `batch_size` and `timeout` in the config file. To change these values, use `--batch-size` and `--timeout`.
 
+### Copy translations to another branch
+
+```bash
+frappe-translator backfill /path/to/develop-bench /path/to/version-16-bench
+```
+
+Fills empty translations in the second bench with the translations of the first bench, for entries with the same msgid and msgctxt. Existing translations are kept, and only `msgstr` lines change. It makes no Claude calls. Use it to translate the newest branch first and copy the results to older branches before you translate their remaining gaps. `--app` limits it to some apps.
+
 ### Check translation coverage
 
 ```bash

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from frappe_translator.models import TranslationResult
 from frappe_translator.po_handler import (
     POWriter,
+    backfill_po,
     filter_entries,
     read_po_translations,
     read_pot_entries,
@@ -207,3 +208,33 @@ class TestPOWriter:
 
         assert "Could not write to" in caplog.text
         assert "'Save'" in caplog.text
+
+
+class TestBackfillPo:
+    def test_copies_only_missing_translations(self, tmp_path: Path) -> None:
+        header = 'msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=UTF-8\\n"\n\n'
+        source = tmp_path / "source.po"
+        source.write_text(
+            header
+            + 'msgid "Save"\nmsgstr "Speichern"\n\n'
+            + 'msgctxt "Verb"\nmsgid "Open"\nmsgstr "Öffnen"\n\n'
+            + 'msgid "Open"\nmsgstr "Offen"\n\n'
+            + 'msgid "Cancel"\nmsgstr "Abbrechen (neu)"\n\n'
+            + 'msgid "Only in source"\nmsgstr "Nur in der Quelle"\n'
+        )
+        target = tmp_path / "target.po"
+        original = (
+            header
+            + '#: app/a.py:1\nmsgid "Save"\nmsgstr ""\n\n'
+            + 'msgctxt "Verb"\nmsgid "Open"\nmsgstr ""\n\n'
+            + 'msgid "Cancel"\nmsgstr "Abbrechen"\n\n'
+            + 'msgid "Only in target"\nmsgstr ""\n'
+        )
+        target.write_text(original)
+
+        assert backfill_po(source, target) == 2
+
+        expected = original.replace('msgid "Save"\nmsgstr ""', 'msgid "Save"\nmsgstr "Speichern"').replace(
+            'msgid "Open"\nmsgstr ""', 'msgid "Open"\nmsgstr "Öffnen"'
+        )
+        assert target.read_text() == expected

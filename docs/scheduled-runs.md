@@ -119,6 +119,8 @@ cd ~/translate/glossaries && git add -A && git commit -m "chore: seed glossaries
 
 ## 7. The script
 
+The script translates the newest branch first. Each older branch first gets the translations of the newer branch with `frappe-translator backfill`, so only its remaining gaps go to Claude. A string that exists on all branches is translated once.
+
 Save as `~/translate/translate-all.sh` and run `chmod +x` on it:
 
 ```bash
@@ -127,36 +129,56 @@ set -uo pipefail
 export PATH="$HOME/.local/bin:$PATH"   # cron has a minimal PATH
 source ~/.translate.env
 
-for BENCH in ~/translate/*/; do
-  [ -d "$BENCH/apps" ] || continue      # skips repos/
-  for APP_DIR in "$BENCH"apps/*/; do
+BASES=(develop version-16-hotfix version-15-hotfix)   # newest first
+PREVIOUS=""
+
+for BASE in "${BASES[@]}"; do
+  BENCH=~/translate/$BASE
+  BRANCH="translations/$BASE"
+
+  # Start from upstream plus the open pull request, so its unmerged translations are kept
+  for APP_DIR in "$BENCH"/apps/*/; do
+    cd "$APP_DIR" || continue
+    git fetch -q upstream "$BASE" || continue
+    if git fetch -q origin "$BRANCH" 2>/dev/null; then
+      git reset -q --hard "origin/$BRANCH"   # discards local changes
+      git rebase -q "upstream/$BASE" || { git rebase --abort; git reset -q --hard "upstream/$BASE"; }
+    else
+      git reset -q --hard "upstream/$BASE"
+    fi
+  done
+
+  # Copy the translations of the newer branch. This needs no Claude calls.
+  [ -n "$PREVIOUS" ] && frappe-translator backfill ~/translate/"$PREVIOUS" "$BENCH"
+  PREVIOUS=$BASE
+
+  for APP_DIR in "$BENCH"/apps/*/; do
     APP=$(basename "$APP_DIR")
     [ -f "$APP_DIR/$APP/locale/main.pot" ] || continue
     cd "$APP_DIR" || continue
 
-    BASE=$(git rev-parse --abbrev-ref HEAD)
-    BRANCH="translations/$BASE"
-    git fetch upstream "$BASE" && git reset --hard "upstream/$BASE"   # discards local changes
-
+    # A run that stops at the token limit has written its finished batches, so commit them too
     frappe-translator translate "$BENCH" --app "$APP" --mode fill-missing \
-      --config ~/translate/frappe-translator.toml || continue
+      --config ~/translate/frappe-translator.toml
     git diff --quiet -- '*.po' && continue
 
-    git switch -C "$BRANCH"
     git add -- '*.po'
-    git commit -m "chore: update translations"
-    git push -f origin "$BRANCH"
+    git commit -q -m "chore: update translations"
+    git push -f origin "HEAD:refs/heads/$BRANCH"
     gh pr create --base "$BASE" --head "$BRANCH" \
       --title "chore: update translations ($BASE)" \
       --body "Automated translations by frappe-translator." || true   # PR exists: the push updated it
-    git switch "$BASE"
   done
 done
 ```
 
 Notes:
 
-- The branch name is the same every night. The force push updates the open pull request instead of opening a new one.
+- The worktree stays on the commit with the new translations. The next branch copies them from there, and the next night resets the worktree again.
+- The pull request branch gets one commit per night. Each night, the script rebases it on upstream. Commits that upstream already has, for example after a merge, become empty and are dropped. If the rebase has a conflict, the script starts from upstream. The strings of the old pull request that are marked as done in the progress file are then not translated again. Run `frappe-translator clear-progress <bench>` to translate them again.
+- `backfill` only fills empty translations with the same msgid and msgctxt. It never changes an existing translation, and it changes only `msgstr` lines.
+- The pull requests of the older branches contain the copied translations and the new ones together.
+- If the newer branch reaches the token limit, the older branches still get the backfill. Their own translation run then stops at the limit as well.
 - Benches run one after the other. They share one Claude subscription, so parallel runs only reach the token limit sooner.
 - `git reset --hard` deletes local edits in the worktrees. Use these folders only for this job.
 - The script does not regenerate `main.pot`. It expects upstream to keep it up to date.

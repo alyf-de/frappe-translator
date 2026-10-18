@@ -241,6 +241,32 @@ def status(bench_path: Path, app: tuple[str, ...]) -> None:
             click.echo(f"  {locale}: {translated}/{total} ({pct:.1f}%)")
 
 
+@main.command()
+@click.argument("source_bench", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("target_bench", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--app", "-a", multiple=True, help="App to backfill (repeatable, default: all)")
+def backfill(source_bench: Path, target_bench: Path, app: tuple[str, ...]) -> None:
+    """Copy translations from SOURCE_BENCH into empty msgstrs of TARGET_BENCH, e.g. develop to a hotfix branch.
+
+    Only entries with the same msgid and msgctxt are filled. Existing translations are kept. No Claude calls.
+    """
+    _setup_logging(verbose=False)
+
+    from frappe_translator.discovery import discover_bench
+    from frappe_translator.po_handler import backfill_po
+
+    source_apps = {a.name: a for a in discover_bench(source_bench)}
+    for target_app in discover_bench(target_bench):
+        source_app = source_apps.get(target_app.name)
+        if source_app is None or (app and target_app.name not in app):
+            continue
+        for locale, target_po in sorted(target_app.po_paths.items()):
+            if locale in source_app.po_paths:
+                copied = backfill_po(source_app.po_paths[locale], target_po)
+                if copied:
+                    click.echo(f"{target_app.name} {locale}: {copied} translations copied")
+
+
 @main.command("clear-progress")
 @click.argument("bench_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 def clear_progress(bench_path: Path) -> None:
