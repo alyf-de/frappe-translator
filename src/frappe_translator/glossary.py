@@ -66,14 +66,30 @@ def load_glossary_file(glossary_dir: Path, app: str) -> GlossaryFile:
                 raise ValueError(
                     f'{path}: {term!r} / {lang!r} must be {{"text": ..., "source": "manual"}}, got {entry!r}'
                 )
-    return _merge_case_duplicates(data)
+    return _merge_duplicates(data)
 
 
-def _merge_case_duplicates(data: GlossaryFile) -> GlossaryFile:
-    """Merge terms that differ only in case; per language the higher source wins."""
+def term_key(term: str, known: set[str]) -> str:
+    """Lowercase ``term`` and drop a plural "s" if ``known`` has the singular."""
+    key = term.lower()
+    if key.endswith("s") and key[:-1] in known:
+        return key[:-1]
+    return key
+
+
+def _merge_duplicates(data: GlossaryFile) -> GlossaryFile:
+    """Merge terms that differ only in case; per language the higher source wins.
+
+    Drop a plural whose singular is also in ``data``, unless the plural has a manual translation.
+    """
+    known = {term.lower() for term in data}
     merged: GlossaryFile = {}
     spellings: dict[str, str] = {}
     for term, langs in data.items():
+        is_plural = term_key(term, known) != term.lower()
+        is_manual = any(entry["source"] == "manual" for entry in langs.values())
+        if is_plural and not is_manual:
+            continue
         merged_langs = merged.setdefault(spellings.setdefault(term.lower(), term), {})
         for lang, entry in langs.items():
             current = merged_langs.get(lang)

@@ -20,6 +20,7 @@ from frappe_translator.glossary import (
     migrate_bench_glossary,
     save_glossary_file,
     seed_glossary,
+    term_key,
 )
 from frappe_translator.models import TermGlossary, TranslationEntry
 from frappe_translator.po_handler import (
@@ -212,7 +213,7 @@ def _term_usage(terms: GlossaryFile, entries: list[TranslationEntry]) -> dict[st
     usage = {}
     for term in terms:
         term_lower = term.lower()
-        pattern = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
+        pattern = re.compile(rf"\b{re.escape(term)}s?\b", re.IGNORECASE)
         # The substring test is a fast pre-filter for the regex
         usage[term] = [
             m for m, m_lower in zip(msgids, msgids_lower, strict=True) if term_lower in m_lower and pattern.search(m)
@@ -369,7 +370,7 @@ async def extract_new_terms(
         known = {term.lower() for a in app_chain(app.name, app_names, config.app_priority) for term in files[a]}
         new_terms = []
         for term in extracted_terms.terms:
-            if term.lower() not in known:
+            if term_key(term, known) not in known:
                 new_terms.append(term)
                 known.add(term.lower())
         if new_terms:

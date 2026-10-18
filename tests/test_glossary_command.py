@@ -12,6 +12,7 @@ from frappe_translator import pipeline
 from frappe_translator.cli import main
 from frappe_translator.config import TranslatorConfig
 from frappe_translator.glossary import CORE_TERMS, load_glossary_file
+from frappe_translator.models import TermGlossary
 from tests.test_pipeline import BatchRecordingRunner, _add_app, _write_glossary
 
 if TYPE_CHECKING:
@@ -165,3 +166,29 @@ def test_load_glossary_file_merges_case_duplicates(tmp_path: Path) -> None:
     (tmp_path / "frappe.json").write_text(json.dumps(data))
 
     assert load_glossary_file(tmp_path, "frappe") == {"Party": {"de": manual, "fr": opus, "it": opus}}
+
+
+def test_load_glossary_file_drops_plurals_unless_manual(tmp_path: Path) -> None:
+    manual = {"text": "Gutschriften", "source": "manual"}
+    opus = {"text": "Rechnung", "source": "opus"}
+    data = {
+        "Invoices": {"de": {"text": "Rechnungen", "source": "opus"}},
+        "invoice": {"de": opus},
+        "Credit Notes": {"de": manual},
+        "Credit Note": {},
+        "Sales": {},
+    }
+    (tmp_path / "frappe.json").write_text(json.dumps(data))
+
+    assert load_glossary_file(tmp_path, "frappe") == {
+        "invoice": {"de": opus},
+        "Credit Notes": {"de": manual},
+        "Credit Note": {},
+        "Sales": {},
+    }
+
+
+def test_glossary_term_matches_plural() -> None:
+    glossary = TermGlossary(terms={"Invoice": {"de": "Rechnung"}})
+
+    assert glossary.get_relevant_terms("Submit all invoices") == {"Invoice": {"de": "Rechnung"}}

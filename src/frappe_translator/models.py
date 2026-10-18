@@ -47,7 +47,7 @@ class TermGlossary:
             return
         # Sort by length descending so longer terms match first
         sorted_terms = sorted(self.terms.keys(), key=lambda t: -len(t))
-        pattern = "|".join(rf"\b{re.escape(t)}\b" for t in sorted_terms)
+        pattern = "|".join(rf"\b{re.escape(t)}s?\b" for t in sorted_terms)
         self._compiled_pattern = re.compile(pattern, re.IGNORECASE)
 
     def get_relevant_terms(self, text: str) -> dict[str, dict[str, str]]:
@@ -63,7 +63,8 @@ class TermGlossary:
         terms_lower = {t.lower(): t for t in self.terms}
         relevant = {}
         for m in matches:
-            key = terms_lower.get(m.lower())
+            # A plural match like "Invoices" belongs to "Invoice"
+            key = terms_lower.get(m.lower()) or terms_lower.get(m.lower()[:-1])
             if key and key not in relevant:
                 relevant[key] = self.terms[key]
         return relevant
