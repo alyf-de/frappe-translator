@@ -12,7 +12,7 @@ import logging
 from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING
 
-from babel.messages.pofile import read_po, write_po
+from babel.messages.pofile import denormalize, escape, read_po
 
 from frappe_translator.models import TranslationEntry, TranslationResult
 
@@ -28,16 +28,44 @@ def _load_catalog(path: Path) -> Catalog:
         return read_po(f)
 
 
-def _save_catalog(catalog: Catalog, path: Path) -> None:
-    """Write a Catalog in Frappe's canonical format.
+def _patch_msgstrs(text: str, updates: dict[tuple[str, str | None], str]) -> tuple[str, set[tuple[str, str | None]]]:
+    """Replace the msgstr of each ``(msgid, msgctxt)`` entry in ``updates``; return the text and the patched keys.
 
-    Matches ``frappe.gettext.translate.write_catalog``:
-    ``width=0`` (Babel treats 0 and None identically — both disable msgid/msgstr
-    wrapping; we use 0 for type-stub compatibility), ``sort_output=True``
-    (entries sorted by msgid), ``ignore_obsolete=True`` (drop ``#~`` entries).
+    All other lines stay as they are. A full rewrite with Babel's ``write_po`` would also
+    rewrap lines, add flags and rewrite the header, so a PR diff would show the whole file.
     """
-    with path.open("wb") as f:
-        write_po(f, catalog, width=0, sort_output=True, ignore_obsolete=True)
+    patched: set[tuple[str, str | None]] = set()
+    text = "\n\n".join(_patch_entry(block, updates, patched) for block in text.split("\n\n"))
+    return text, patched
+
+
+def _patch_entry(block: str, updates: dict[tuple[str, str | None], str], patched: set[tuple[str, str | None]]) -> str:
+    lines = block.split("\n")
+    # keyword -> (first line, end line) of the keyword line and its continuation lines
+    spans: dict[str, tuple[int, int]] = {}
+    keyword = None
+    for n, line in enumerate(lines):
+        if keyword and line.startswith('"'):
+            spans[keyword] = (spans[keyword][0], n + 1)
+            continue
+        # Plural entries (msgid_plural, msgstr[n]) and obsolete entries (#~) match no keyword
+        keyword = next((k for k in ("msgctxt", "msgid", "msgstr") if line.startswith(f"{k} ")), None)
+        if keyword:
+            spans[keyword] = (n, n + 1)
+    if "msgid" not in spans or "msgstr" not in spans:
+        return block
+
+    def value(keyword: str) -> str:
+        start, end = spans[keyword]
+        return denormalize("\n".join([lines[start].split(" ", 1)[1], *lines[start + 1 : end]]))
+
+    key = (value("msgid"), value("msgctxt") if "msgctxt" in spans else None)
+    if key not in updates:
+        return block
+    start, end = spans["msgstr"]
+    lines[start:end] = [f"msgstr {escape(updates[key])}"]
+    patched.add(key)
+    return "\n".join(lines)
 
 
 def _message_msgid(message) -> str:
@@ -245,13 +273,21 @@ class POWriter:
     def _apply_and_save(self, locale: str, buffer: list[tuple[str, str | None, str]], po_path: Path) -> None:
         """Blocking I/O: apply buffered translations and save. Runs in a thread."""
         catalog = self._get_catalog(locale)
+        updates: dict[tuple[str, str | None], str] = {}
         for msgid, msgctxt, translated_str in buffer:
             message = catalog.get(msgid, context=msgctxt)
             if message is not None:
                 message.string = translated_str
+                updates[(msgid, msgctxt)] = translated_str
             else:
                 logger.debug("Entry not found in %s: msgid=%r msgctxt=%r", po_path, msgid, msgctxt)
-        _save_catalog(catalog, po_path)
+        # newline="" keeps the line endings exactly as they are
+        with po_path.open(encoding="utf-8", newline="") as f:
+            text, patched = _patch_msgstrs(f.read(), updates)
+        with po_path.open("w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        for msgid, msgctxt in updates.keys() - patched:
+            logger.warning("Could not write to %s: msgid=%r msgctxt=%r", po_path, msgid, msgctxt)
 
     async def flush_all(self) -> None:
         """Flush all locale buffers concurrently."""

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import textwrap
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 from frappe_translator.models import TranslationResult
 from frappe_translator.po_handler import (
@@ -141,3 +144,66 @@ class TestPOWriter:
         asyncio.run(writer.flush_all())
 
         assert writer.pending_count == 0
+
+    def test_flush_changes_only_the_translated_msgstr_lines(self, tmp_path: Path) -> None:
+        # Crowdin style: unwrapped lines, Crowdin headers, no flags
+        long_comment = "#. Description of the 'Very Long Field Name' (Small Text) field in DocType 'Some Settings Doc'"
+        original = textwrap.dedent(f"""\
+            msgid ""
+            msgstr ""
+            "Content-Type: text/plain; charset=UTF-8\\n"
+            "X-Crowdin-Project: frappe\\n"
+
+            {long_comment}
+            #: frappe/a.py:1
+            msgid "Hello {{0}}"
+            msgstr ""
+
+            #: frappe/b.py:2
+            msgid "Line one\\nLine two"
+            msgstr ""
+
+            msgctxt "Verb"
+            msgid "Open"
+            msgstr ""
+            "Old\\n"
+            "value"
+
+            msgid "Untouched {{0}}"
+            msgstr "Unberührt {{0}}"
+            """)
+        po_path = tmp_path / "de.po"
+        po_path.write_text(original)
+        writer = POWriter({"de": po_path})
+        for msgid, msgctxt, text in [
+            ("Hello {0}", None, "Hallo {0}"),
+            ("Line one\nLine two", None, 'Zeile "eins"\nZeile zwei'),
+            ("Open", "Verb", "Öffnen"),
+        ]:
+            writer.buffer_translation(TranslationResult(msgid=msgid, msgctxt=msgctxt, translations={"de": text}))
+
+        asyncio.run(writer.flush_all())
+
+        expected = (
+            original.replace('msgid "Hello {0}"\nmsgstr ""', 'msgid "Hello {0}"\nmsgstr "Hallo {0}"')
+            .replace(
+                'msgid "Line one\\nLine two"\nmsgstr ""',
+                'msgid "Line one\\nLine two"\nmsgstr "Zeile \\"eins\\"\\nZeile zwei"',
+            )
+            .replace('msgstr ""\n"Old\\n"\n"value"', 'msgstr "Öffnen"')
+        )
+        assert po_path.read_text() == expected
+
+    def test_flush_warns_when_an_entry_cannot_be_patched(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Babel reads Windows line endings, but the patch expects "\n"
+        po_path = tmp_path / "de.po"
+        po_path.write_bytes(b'msgid ""\r\nmsgstr ""\r\n\r\nmsgid "Save"\r\nmsgstr ""\r\n')
+        writer = POWriter({"de": po_path})
+        writer.buffer_translation(TranslationResult(msgid="Save", translations={"de": "Speichern"}))
+
+        asyncio.run(writer.flush_all())
+
+        assert "Could not write to" in caplog.text
+        assert "'Save'" in caplog.text
