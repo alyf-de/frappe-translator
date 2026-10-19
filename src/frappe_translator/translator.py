@@ -61,7 +61,8 @@ async def translate_entries(
 
     async def _run_one(batch_idx: int) -> tuple[int, str | None]:
         batch, batch_langs = batches[batch_idx]
-        prompt = _build_batch_prompt(batch, batch_langs, style_config or {}, existing_rule)
+        batch_style = {lang: style for lang, style in (style_config or {}).items() if lang in batch_langs}
+        prompt = _build_batch_prompt(batch, batch_langs, batch_style, existing_rule)
         schema = build_translation_schema(batch_langs)
         try:
             raw = await runner.run(prompt, json_schema=schema)
@@ -218,6 +219,7 @@ def _build_batch_prompt(
                 "msgctxt": ctx.entry.msgctxt,
                 "comments": ctx.entry.comments,
                 "existing": ctx.existing,
+                "conflicts": ctx.conflicts,
                 "snippets_text": snippets_text,
                 "source_files": source_files,
             }

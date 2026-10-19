@@ -11,10 +11,11 @@ if TYPE_CHECKING:
 # Instruction for the modes that send existing translations
 EXISTING_RULES = {
     "fix-glossary": (
-        "Each string shows its existing translations, which do not use the glossary translation of a term in"
-        " the string. Replace that term with its glossary translation, adapt the grammar around it (case,"
-        " plural, articles) and keep the rest of the existing translation unchanged. If the translation already"
-        " uses the glossary term in another grammatical form, return it unchanged."
+        "Each string shows its existing translation and the glossary terms that the translation does not use."
+        " Use a listed glossary translation only where it fits the meaning in this string and makes the"
+        " translation better; then adapt the grammar around it (case, plural, articles) and keep the rest"
+        " unchanged. Otherwise, for example if the translation already uses the term in another grammatical"
+        " form or the term has another meaning here, return the existing translation unchanged."
     ),
     "review-existing": (
         "Each string shows its existing translations. Return an existing translation unchanged if it is"
@@ -62,6 +63,14 @@ def build_translation_schema(target_languages: list[str]) -> str:
     return json.dumps(schema)
 
 
+def format_conflicts(conflicts: dict[str, str]) -> str:
+    """Format {term: glossary translation} as '"Desk" → "Desk", ...'."""
+    return ", ".join(
+        f"{json.dumps(term, ensure_ascii=False)} → {json.dumps(text, ensure_ascii=False)}"
+        for term, text in conflicts.items()
+    )
+
+
 def unique_source_files(source_refs: list[str]) -> list[str]:
     """Extract unique file paths from source refs, preserving order."""
     seen: set[str] = set()
@@ -105,6 +114,7 @@ def build_translation_prompt(
     style_config: dict[str, Any],
     existing: dict[str, str] | None = None,
     existing_rule: str = "",
+    conflicts: dict[str, str] | None = None,
 ) -> str:
     """Build a prompt for translating a single string into multiple languages."""
     lines: list[str] = [
@@ -122,6 +132,8 @@ def build_translation_prompt(
 
     if existing:
         lines.append(f"Existing translations: {json.dumps(existing, ensure_ascii=False)}")
+    if conflicts:
+        lines.append(f"Glossary terms not used: {format_conflicts(conflicts)}")
 
     if snippets_text:
         lines.append("")
@@ -266,6 +278,8 @@ def build_batch_translation_prompt(
 
         if entry_info.get("existing"):
             lines.append(f"Existing translations: {json.dumps(entry_info['existing'], ensure_ascii=False)}")
+        if entry_info.get("conflicts"):
+            lines.append(f"Glossary terms not used: {format_conflicts(entry_info['conflicts'])}")
 
         if entry_info.get("snippets_text"):
             lines.append(f"Source context:\n{entry_info['snippets_text']}")

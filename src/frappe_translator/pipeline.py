@@ -462,6 +462,7 @@ async def _process_app(
     all_po_translations = {lang: po_writer.get_translations(lang) for lang in app_languages}
     langs_per_entry: dict[tuple[str, str | None], set[str]] = {}
     existing_per_entry: dict[tuple[str, str | None], dict[str, str]] = {}
+    conflicts_per_entry: dict[tuple[str, str | None], dict[str, dict[str, str]]] = {}
     filtered: list[TranslationEntry] = []
     for entry in entries:
         key = (entry.msgid, entry.msgctxt)
@@ -473,7 +474,9 @@ async def _process_app(
             continue
         existing = {lang: po[key] for lang, po in all_po_translations.items() if po.get(key, "")}
         if config.mode == "fix-glossary":
-            existing = _glossary_conflicts(curated_glossary.get_relevant_terms(entry.msgid), existing)
+            conflicts = _glossary_conflicts(curated_glossary.get_relevant_terms(entry.msgid), existing)
+            existing = {lang: existing[lang] for lang in conflicts}
+            conflicts_per_entry[key] = conflicts
         if existing:
             filtered.append(entry)
             langs_per_entry[key] = set(existing)
@@ -508,6 +511,7 @@ async def _process_app(
         existing_translations=existing_per_entry,
         existing_rule=EXISTING_RULES.get(config.mode, ""),
         split_languages=config.mode != "fill-missing",
+        glossary_conflicts=conflicts_per_entry,
     )
 
     # Translation with batched writes
@@ -551,17 +555,21 @@ class AppResult:
         self.skipped_failed = 0
 
 
-def _glossary_conflicts(terms: dict[str, dict[str, str]], existing: dict[str, str]) -> dict[str, str]:
-    """Return the existing translations that do not contain the glossary translation of a term in the msgid.
+def _glossary_conflicts(terms: dict[str, dict[str, str]], existing: dict[str, str]) -> dict[str, dict[str, str]]:
+    """Return {lang: {term: glossary translation}} for the terms of the msgid that an existing translation lacks.
 
     shortcut: a substring test, so an inflected form that changes the stem is a false conflict;
-    the review prompt then keeps the translation unchanged.
+    the prompt then lets the model keep the translation unchanged.
     """
     conflicts = {}
     for lang, text in existing.items():
         text_lower = text.lower()
-        if any(langs[lang].lower() not in text_lower for langs in terms.values() if lang in langs):
-            conflicts[lang] = text
+        lang_terms = {term: langs[lang] for term, langs in terms.items() if lang in langs}
+        missing = {
+            term: glossary_text for term, glossary_text in lang_terms.items() if glossary_text.lower() not in text_lower
+        }
+        if missing:
+            conflicts[lang] = missing
     return conflicts
 
 

@@ -25,6 +25,7 @@ def assemble_contexts(
     existing_translations: dict[tuple[str, str | None], dict[str, str]] | None = None,
     existing_rule: str = "",
     split_languages: bool = False,
+    glossary_conflicts: dict[tuple[str, str | None], dict[str, dict[str, str]]] | None = None,
 ) -> list[AssembledContext]:
     """Assemble full translation context for each entry.
 
@@ -35,7 +36,8 @@ def assemble_contexts(
     into the specified languages (used by fill-missing to skip already-translated locales).
     If existing_translations is provided, each prompt shows them with ``existing_rule``
     (used by fix-glossary and review-existing).
-    With split_languages, each entry gets one context per language, with the glossary of that language only.
+    With split_languages, each entry gets one context per language, with the glossary of that language only,
+    and the glossary_conflicts of that language ({lang: {term: glossary translation}}, used by fix-glossary).
     Batches need the same languages for all entries, so this keeps them full when each entry needs a
     different subset of languages.
     """
@@ -62,6 +64,7 @@ def assemble_contexts(
             entry_languages = target_languages
             entry_style = style_config
         existing = (existing_translations or {}).get((entry.msgid, entry.msgctxt), {})
+        conflicts = (glossary_conflicts or {}).get((entry.msgid, entry.msgctxt), {})
 
         if not split_languages:
             assembled.append(
@@ -69,20 +72,29 @@ def assemble_contexts(
                     entry,
                     snippets,
                     snippets_text,
-                    glossary_terms,
-                    entry_languages,
-                    entry_style,
-                    existing,
-                    existing_rule,
+                    glossary_terms=glossary_terms,
+                    languages=entry_languages,
+                    style_config=entry_style,
+                    existing=existing,
+                    existing_rule=existing_rule,
+                    conflicts={},
                 )
             )
             continue
         for lang in entry_languages:
             lang_terms = {term: {lang: langs[lang]} for term, langs in glossary_terms.items() if lang in langs}
-            lang_style = {lang: entry_style[lang]} if lang in entry_style else {}
-            lang_existing = {lang: existing[lang]} if lang in existing else {}
             assembled.append(
-                _context(entry, snippets, snippets_text, lang_terms, [lang], lang_style, lang_existing, existing_rule)
+                _context(
+                    entry,
+                    snippets,
+                    snippets_text,
+                    glossary_terms=lang_terms,
+                    languages=[lang],
+                    style_config={lang: entry_style[lang]} if lang in entry_style else {},
+                    existing={lang: existing[lang]} if lang in existing else {},
+                    existing_rule=existing_rule,
+                    conflicts=conflicts.get(lang, {}),
+                )
             )
 
     return assembled
@@ -97,6 +109,7 @@ def _context(
     style_config: dict[str, Any],
     existing: dict[str, str],
     existing_rule: str,
+    conflicts: dict[str, str],
 ) -> AssembledContext:
     prompt = build_translation_prompt(
         entry=entry,
@@ -106,6 +119,7 @@ def _context(
         style_config=style_config,
         existing=existing,
         existing_rule=existing_rule,
+        conflicts=conflicts,
     )
     return AssembledContext(
         entry=entry,
@@ -114,4 +128,5 @@ def _context(
         prompt=prompt,
         target_languages=languages,
         existing=existing,
+        conflicts=conflicts,
     )

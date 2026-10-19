@@ -91,6 +91,7 @@ class AssembledContext:
     prompt: str = ""
     target_languages: list[str] = field(default_factory=list)
     existing: dict[str, str] = field(default_factory=dict)  # fix-glossary, review-existing: {lang: current msgstr}
+    conflicts: dict[str, str] = field(default_factory=dict)  # fix-glossary: {term: glossary translation}
 
 
 @dataclass

@@ -216,7 +216,8 @@ async def test_fix_glossary_corrects_only_curated_conflicts(tmp_bench: Path, mon
     # "Cancel" already uses the glossary term, and the fr PO file has no translations
     [(prompt, schema)] = runner.calls
     assert 'Existing translations: {"de": "Rechnung {0} wurde eingereicht"}' in prompt
-    assert "Replace that term with its glossary translation" in prompt
+    assert 'Glossary terms not used: "Invoice" → "Faktura"' in prompt
+    assert "Use a listed glossary translation only where it fits the meaning" in prompt
     assert "### String 2" not in prompt
     assert json.loads(schema)["properties"]["translations"]["items"]["required"] == ["msgid", "msgctxt", "de"]
     de_po = read_po_translations(tmp_bench / "apps" / "sample_app" / "sample_app" / "locale" / "de.po")
@@ -300,5 +301,6 @@ async def test_fix_glossary_batches_per_language(tmp_bench: Path, monkeypatch: p
     assert sorted(batches) == ["de", "fr"]
     assert "### String 2" in batches["de"]
     assert "### String 2" not in batches["fr"]
-    # The glossary shows only the batch language
+    # The glossary and the style instructions show only the batch language
     assert '"Invoice": {"fr": "Facture"}' in batches["fr"]
+    assert "- de: formality" not in batches["fr"]
