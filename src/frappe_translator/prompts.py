@@ -13,9 +13,10 @@ EXISTING_RULES = {
     "fix-glossary": (
         "Each string shows its existing translation and the glossary terms that the translation does not use."
         " Use a listed glossary translation only where it fits the meaning in this string and makes the"
-        " translation better; then adapt the grammar around it (case, plural, articles) and keep the rest"
-        " unchanged. Otherwise, for example if the translation already uses the term in another grammatical"
-        " form or the term has another meaning here, return the existing translation unchanged."
+        " translation better; then adapt the grammar around it (grammatical case, plural, articles). Change only"
+        " what the glossary term needs; do not change capitalization, punctuation or wording elsewhere, even if"
+        " you would write it differently. Otherwise, for example if the translation already uses the term in"
+        " another grammatical form or the term has another meaning here, return the existing translation unchanged."
     ),
     "review-existing": (
         "Each string shows its existing translations. Return an existing translation unchanged if it is"
@@ -183,12 +184,14 @@ def build_translation_prompt(
             "3. Preserve Markdown formatting",
             "4. Do not translate technical identifiers (DocType names used as identifiers)",
             "5. Match the tone and register of the original (error messages stay direct, help text stays friendly)",
-            "6. In your response, echo `msgid` AND `msgctxt` verbatim (use null for `msgctxt` when the"
+            "6. Use the capitalization conventions of the target language; do not copy English title case."
+            " Proper names, product names and identifiers keep their spelling.",
+            "7. In your response, echo `msgid` AND `msgctxt` verbatim (use null for `msgctxt` when the"
             " input shows it as null) — these together identify the source entry.",
         ]
     )
     if existing:
-        lines.append(f"7. {existing_rule}")
+        lines.append(f"8. {existing_rule}")
     lines.extend(["", "## Target Languages", ", ".join(target_languages)])
 
     return "\n".join(lines)
@@ -222,12 +225,14 @@ def build_batch_translation_prompt(
         "3. Preserve Markdown formatting",
         "4. Do not translate technical identifiers (DocType names used as identifiers)",
         "5. Match the tone and register of the original (error messages stay direct, help text stays friendly)",
-        "6. In your response, echo each entry's `msgid` AND `msgctxt` verbatim — these together identify"
+        "6. Use the capitalization conventions of the target language; do not copy English title case."
+        " Proper names, product names and identifiers keep their spelling.",
+        "7. In your response, echo each entry's `msgid` AND `msgctxt` verbatim — these together identify"
         " the entry. Two entries can share the same msgid with different msgctxt and need separate"
         " translations. Use null for `msgctxt` when the input shows it as null.",
     ]
     if any(entry_info.get("existing") for entry_info in entries):
-        lines.append(f"7. {existing_rule}")
+        lines.append(f"8. {existing_rule}")
 
     if shared_glossary:
         lines.append("")
