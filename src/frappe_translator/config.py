@@ -32,10 +32,9 @@ class TranslatorConfig:
     batch_size: int = 50
     timeout: int = 120
     model: str | None = None
-    extract_model: str | None = None  # Pass 1; default: model
+    extract_model: str | None = None  # glossary term extraction; default: model
     mode: str = "fill-missing"
     resume: bool = True
-    skip_glossary: bool = False
     apps: list[str] = field(default_factory=list)
     languages: list[str] = field(default_factory=list)
     exclude_languages: list[str] = field(default_factory=list)
@@ -78,7 +77,6 @@ def load_config(path: Path | None) -> TranslatorConfig:
     run = data.get("run", {})
     config.mode = run.get("mode", config.mode)
     config.resume = run.get("resume", config.resume)
-    config.skip_glossary = run.get("skip_glossary", config.skip_glossary)
     config.apps = run.get("apps", config.apps)
     config.languages = run.get("languages", config.languages)
     config.exclude_languages = run.get("exclude_languages", config.exclude_languages)

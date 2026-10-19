@@ -76,7 +76,6 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
         model=config.model,
         timeout=config.timeout,
     )
-    extract_runner = _extract_runner(config)
     progress = ProgressTracker(bench_path, max_retries=config.max_retries)
     if config.resume:
         progress.load()
@@ -97,17 +96,10 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     for app in all_apps_ordered:
         all_po_paths[app.name] = app.po_paths
 
-    # Cache for POT entries to avoid re-parsing in _process_app
-    pot_cache: dict[str, list[TranslationEntry]] = {}
-
     glossary_dir = config.get_glossary_dir()
     migrate_bench_glossary(bench_path, glossary_dir, all_apps_ordered, config.app_priority)
     app_names = {app.name for app in all_apps_ordered}
     files = {name: load_glossary_file(glossary_dir, name) for name in app_names}
-
-    # Pass 1: extract terms per app; new terms go into that app's glossary file as {}
-    if not config.skip_glossary:
-        await extract_new_terms(config, apps, files, extract_runner, pot_cache)
 
     # Runtime glossary per app: merged chain files, then PO lookups fill gaps, then [terminology] wins.
     # PO lookups are not written back; they are recomputed each run.
@@ -126,7 +118,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
         glossaries[app.name] = TermGlossary(terms=terms)
         logger.info("%s: glossary with %d terms", app.name, len(terms))
 
-    # Process each app in dependency order (Pass 2 only)
+    # Process each app in dependency order
     for app in apps:
         logger.info("=== Processing app: %s ===", app.name)
         app_results = await _process_app(
@@ -137,7 +129,6 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             target_languages=target_languages,
             style_config=style_config,
             glossary=glossaries[app.name],
-            pot_cache=pot_cache,
         )
         summary.app_results[app.name] = app_results
 
@@ -391,7 +382,6 @@ async def _process_app(
     target_languages: list[str],
     style_config: dict,
     glossary: TermGlossary,
-    pot_cache: dict[str, list[TranslationEntry]] | None = None,
 ) -> AppResult:
     """Process a single app through the full pipeline."""
     result = AppResult(app_name=app.name)
@@ -406,10 +396,7 @@ async def _process_app(
 
     app_style_config = {lang: style_config[lang] for lang in app_languages if lang in style_config}
 
-    # Read POT entries (use cache from Pass 1 if available)
-    entries = pot_cache.get(app.name) if pot_cache else None
-    if entries is None:
-        entries = read_pot_entries(app.pot_path)
+    entries = read_pot_entries(app.pot_path)
     result.total_entries = len(entries)
     logger.info("%s: %d entries in POT", app.name, len(entries))
 

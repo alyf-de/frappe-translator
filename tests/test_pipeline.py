@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from frappe_translator import pipeline
 from frappe_translator.config import TranslatorConfig
 from frappe_translator.discovery import discover_bench, resolve_app_order
-from frappe_translator.glossary import migrate_bench_glossary
+from frappe_translator.glossary import load_glossary_file, migrate_bench_glossary
 from tests.test_translator import RecordingRunner, _default_response
 
 if TYPE_CHECKING:
@@ -18,14 +18,14 @@ if TYPE_CHECKING:
 
 
 class BatchRecordingRunner(RecordingRunner):
-    """RecordingRunner that also serves Pass 1's run_batch."""
+    """RecordingRunner that also serves the term extraction's run_batch."""
 
     async def run_batch(self, prompts: list[str], label: str) -> list[str]:
         return [await self.run(prompt) for prompt in prompts]
 
 
 def _response(prompt: str, schema: str | None) -> str:
-    if schema is None:  # Pass 1 term extraction
+    if schema is None:  # term extraction
         return json.dumps({"terms": ["Invoice", "Hello", "Cancel"]})
     data = json.loads(_default_response(prompt, schema))
     # A term map the model might still volunteer; it must never be persisted
@@ -66,7 +66,6 @@ async def test_runtime_glossary_merges_chain_po_lookup_and_terminology(
 
     config = TranslatorConfig(
         bench_path=tmp_bench,
-        skip_glossary=True,
         resume=False,
         terminology={"de": {"Invoice": "Faktura"}},
     )
@@ -82,17 +81,33 @@ async def test_runtime_glossary_merges_chain_po_lookup_and_terminology(
         assert json.loads(path.read_text()) == files[app]
 
 
-async def test_pass1_adds_new_terms_to_app_file_unless_in_chain(
-    tmp_bench: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def _extract(config: TranslatorConfig, runner: BatchRecordingRunner) -> None:
+    all_apps = resolve_app_order(discover_bench(config.bench_path), config.app_priority)
+    apps = [a for a in all_apps if a.name in config.apps] if config.apps else all_apps
+    files = {app.name: load_glossary_file(config.get_glossary_dir(), app.name) for app in all_apps}
+    await pipeline.extract_new_terms(config, apps, files, runner, {})
+
+
+async def test_translate_does_not_extract_terms(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = BatchRecordingRunner(_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, resume=False))
+
+    assert runner.calls
+    assert all(schema is not None for _, schema in runner.calls)
+    assert not (tmp_bench / "glossaries" / "sample_app.json").exists()
+    assert not (tmp_bench / "glossary_extracted.json").exists()
+
+
+async def test_extraction_adds_new_terms_to_app_file_unless_in_chain(tmp_bench: Path) -> None:
     _add_app(tmp_bench, "frappe", ["Invoice"])
     frappe_file = {"Invoice": {"de": {"text": "Rechnung", "source": "manual"}}}
     frappe_path = _write_glossary(tmp_bench, "frappe", frappe_file)
     runner = BatchRecordingRunner(_response)
-    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
 
-    config = TranslatorConfig(bench_path=tmp_bench, apps=["sample_app"], resume=False)
-    await pipeline.run_pipeline(config)
+    config = TranslatorConfig(bench_path=tmp_bench, apps=["sample_app"])
+    await _extract(config, runner)
 
     app_path = tmp_bench / "glossaries" / "sample_app.json"
     assert app_path.read_text() == '{\n  "Cancel": {},\n  "Hello": {}\n}\n'
@@ -105,8 +120,8 @@ async def test_pass1_adds_new_terms_to_app_file_unless_in_chain(
 
     # Second run: nothing left to extract
     runner.calls.clear()
-    await pipeline.run_pipeline(config)
-    assert all(schema is not None for _, schema in runner.calls)
+    await _extract(config, runner)
+    assert not runner.calls
 
 
 def test_migrates_bench_wide_glossary_to_app_files(tmp_bench: Path) -> None:
@@ -156,13 +171,12 @@ def test_migration_gives_shared_term_to_each_app_outside_priority(tmp_bench: Pat
     assert json.loads((glossary_dir / "frappe.json").read_text()) == {"Save": {}}
 
 
-async def test_changed_glossary_dir_extracts_terms_again(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_changed_glossary_dir_extracts_terms_again(tmp_bench: Path) -> None:
     runner = BatchRecordingRunner(_response)
-    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
     old_dir, new_dir = tmp_bench / "old_glossaries", tmp_bench / "new_glossaries"
 
-    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, glossary_dir=old_dir, resume=False))
-    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, glossary_dir=new_dir, resume=False))
+    await _extract(TranslatorConfig(bench_path=tmp_bench, glossary_dir=old_dir), runner)
+    await _extract(TranslatorConfig(bench_path=tmp_bench, glossary_dir=new_dir), runner)
 
     # The extraction cache belongs to old_dir, so the new folder gets its own terms
     assert json.loads((new_dir / "sample_app.json").read_text()) == json.loads(

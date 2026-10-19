@@ -100,7 +100,7 @@ model = "haiku"
 glossary_dir = "/home/<user>/translate/glossaries"  # git checkout, shared by all benches
 ```
 
-Without `model`, the tool uses the default model of your Claude Code account. `model` sets the model for both passes, unless you also set `extract_model` for pass 1. See [docs/model-comparison.md](model-comparison.md) for the quality difference between Haiku and Sonnet.
+Without `model`, the tool uses the default model of your Claude Code account. `extract_model` sets the model for the term extraction of the `glossary` command. See [docs/model-comparison.md](model-comparison.md) for the quality difference between Haiku and Sonnet.
 
 ## 6. Seed the glossaries
 
@@ -207,7 +207,7 @@ cd ~/translate/glossaries || exit 1
 git pull --ff-only || exit 1   # get manual edits first, so the push does not conflict
 
 # A run that stops at the token limit has saved its finished batches, so commit them too
-frappe-translator glossary ~/translate/develop --model sonnet --config ~/translate/frappe-translator.toml
+frappe-translator glossary ~/translate/develop --model opus --extract-model haiku --config ~/translate/frappe-translator.toml
 STATUS=$?
 
 git add -A

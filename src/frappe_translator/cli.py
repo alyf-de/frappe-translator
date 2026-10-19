@@ -46,7 +46,6 @@ def main() -> None:
 @click.option("--batch-size", type=int, default=50, help="Strings per batch")
 @click.option("--timeout", type=int, default=120, help="Timeout per claude call in seconds")
 @click.option("--model", type=str, default=None, help="Claude model to use (e.g., sonnet, opus)")
-@click.option("--extract-model", type=str, default=None, help="Claude model for Pass 1 (default: --model)")
 @click.option("--resume/--no-resume", default=True, help="Resume from previous progress")
 @click.option("--dry-run", is_flag=True, help="Show what would be translated without running")
 @click.option(
@@ -55,7 +54,6 @@ def main() -> None:
     default=None,
     help="Folder with per-app glossary files (default: <bench>/glossaries)",
 )
-@click.option("--skip-glossary", is_flag=True, help="Skip Pass 1 term extraction (single-pass mode)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.pass_context
 def translate(
@@ -70,11 +68,9 @@ def translate(
     batch_size: int,
     timeout: int,
     model: str | None,
-    extract_model: str | None,
     resume: bool,
     dry_run: bool,
     glossary_dir: Path | None,
-    skip_glossary: bool,
     verbose: bool,
 ) -> None:
     """Translate Frappe app strings using Claude."""
@@ -103,14 +99,10 @@ def translate(
         cfg.timeout = timeout
     if model is not None:
         cfg.model = model
-    if extract_model is not None:
-        cfg.extract_model = extract_model
     if glossary_dir is not None:
         cfg.glossary_dir = glossary_dir
     if source("resume") != click.core.ParameterSource.DEFAULT:
         cfg.resume = resume
-    if source("skip_glossary") != click.core.ParameterSource.DEFAULT:
-        cfg.skip_glossary = skip_glossary
 
     # Check claude CLI is available
     if not dry_run:
@@ -134,7 +126,7 @@ def translate(
 @main.command()
 @click.argument("bench_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--model", required=True, help="Claude model: sonnet or opus. Sets the source of written entries.")
-@click.option("--extract-model", type=str, default=None, help="Claude model for Pass 1 (default: --model)")
+@click.option("--extract-model", type=str, default=None, help="Claude model for term extraction (default: --model)")
 @click.option("--seed", is_flag=True, help="Add DocType names and core Frappe terms to the glossary files first")
 @click.option("--config", "-c", type=click.Path(exists=True, path_type=Path), default=None, help="Config TOML file")
 @click.option("--app", "-a", multiple=True, help="App to build the glossary for (repeatable, default: all)")
@@ -317,7 +309,6 @@ def _dry_run(cfg: TranslatorConfig) -> None:
     click.echo(f"Mode: {cfg.mode}")
     click.echo(f"Target languages ({len(target_languages)}): {', '.join(target_languages)}")
     click.echo(f"Concurrency: {cfg.concurrency}")
-    click.echo(f"Glossary: {'disabled' if cfg.skip_glossary else 'enabled'}")
     click.echo()
 
     total_entries = 0
@@ -345,7 +336,4 @@ def _dry_run(cfg: TranslatorConfig) -> None:
 
     click.echo(f"\nTotal: {total_entries} entries across {len(apps)} apps")
     estimated_batches = (total_entries + cfg.batch_size - 1) // cfg.batch_size
-    if not cfg.skip_glossary:
-        click.echo(f"Estimated claude calls: ~{estimated_batches} (Pass 1) + ~{estimated_batches} (Pass 2)")
-    else:
-        click.echo(f"Estimated claude calls: ~{estimated_batches} (single pass)")
+    click.echo(f"Estimated claude calls: ~{estimated_batches}")

@@ -53,7 +53,7 @@ Sonnet translated most of these terms correctly.
 
 ## Possible improvements
 
-- Most Haiku errors are glossary terms. Sonnet for term extraction (pass 1) and Haiku for translation (pass 2) can possibly close a large part of the gap. Use `--extract-model` (or `extract_model` in the config) to set a different model for pass 1. This option was not tested.
+- Most Haiku errors are glossary terms. A glossary translated by Sonnet or Opus (`glossary` command) and Haiku for `translate` can possibly close a large part of the gap. This was not tested.
 - References to DocType JSON files have no line number. The pipeline skips them ("Skipping malformed source ref (no colon)"). Thus, DocType and field labels get no source context. This is a possible cause of untranslated DocType names such as "Banking Reference Mapping".
 
 ## Limits of this test

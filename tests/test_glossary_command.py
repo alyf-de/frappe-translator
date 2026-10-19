@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 def _response(prompt: str, schema: str | None) -> str:
-    if schema is None:  # Pass 1 term extraction
+    if schema is None:  # term extraction
         return json.dumps({"terms": []})
     term_props = json.loads(schema)["properties"]["terms"]["properties"]
     terms = {term: {lang: f"{term}::{lang}" for lang in spec["required"]} for term, spec in term_props.items()}
@@ -100,7 +100,7 @@ async def test_seed_adds_doctype_names_and_core_terms(tmp_bench: Path, monkeypat
     }
 
 
-async def test_extract_model_runs_pass_1(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_extract_model_runs_term_extraction(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runners: dict[str | None, BatchRecordingRunner] = {}
 
     def make_runner(model: str | None, **_: object) -> BatchRecordingRunner:
