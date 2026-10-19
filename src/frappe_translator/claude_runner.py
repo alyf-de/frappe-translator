@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import sys
 from asyncio.subprocess import PIPE
@@ -30,7 +31,21 @@ _BAR_INTERVAL = 1.0  # seconds between redraws of the progress bar
 
 
 def _is_rate_limited(text: str) -> bool:
-    """Check if output indicates a rate limit error."""
+    """Check if claude CLI output or an error message indicates a rate limit error.
+
+    A success envelope holds UUIDs, numbers and the model's text, which often contain "429",
+    so only the error fields of an envelope count.
+    """
+    try:
+        envelope = json.loads(text)
+    except json.JSONDecodeError:
+        envelope = None
+    if isinstance(envelope, dict):
+        if not envelope.get("is_error"):
+            return False
+        if envelope.get("api_error_status") == 429:
+            return True
+        text = str(envelope.get("result", ""))
     text_lower = text.lower()
     return any(p in text_lower for p in _RATE_LIMIT_PATTERNS)
 

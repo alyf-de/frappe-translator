@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -68,3 +69,43 @@ async def test_shows_progress_bar_in_terminal(
     assert "100%" in output
     # No status log lines while the bar is shown
     assert not caplog.records
+
+
+async def test_success_output_with_rate_limit_words_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Success envelopes hold UUIDs, long floats and the model's text, which can contain "429" or "rate limit"
+    output = json.dumps(
+        {
+            "is_error": False,
+            "session_id": "01d798c9-c394-4c70-a429-e8905fe3a56d",
+            "total_cost_usd": 0.004291,
+            "result": '{"de": "Rate Limit überschritten"}',
+        }
+    )
+    runner = ClaudeRunner()
+    calls = []
+
+    async def execute(prompt: str, json_schema: str | None = None) -> str:
+        calls.append(prompt)
+        return output
+
+    monkeypatch.setattr(runner, "_execute", execute)
+
+    assert await runner.run("prompt") == output
+    assert len(calls) == 1
+    assert runner._backoff_until == 0.0
+
+
+async def test_error_envelope_with_status_429_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(claude_runner, "_INITIAL_BACKOFF", 0.0)
+    limited = json.dumps({"is_error": True, "api_error_status": 429, "result": "API Error"})
+    success = json.dumps({"is_error": False, "result": "ok"})
+    outputs = [limited, success]
+    runner = ClaudeRunner()
+
+    async def execute(prompt: str, json_schema: str | None = None) -> str:
+        return outputs.pop(0)
+
+    monkeypatch.setattr(runner, "_execute", execute)
+
+    assert await runner.run("prompt") == success
+    assert not outputs
