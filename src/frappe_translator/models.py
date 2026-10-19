@@ -90,6 +90,7 @@ class AssembledContext:
     glossary_terms: dict[str, dict[str, str]] = field(default_factory=dict)
     prompt: str = ""
     target_languages: list[str] = field(default_factory=list)
+    existing: dict[str, str] = field(default_factory=dict)  # fix-glossary, review-existing: {lang: current msgstr}
 
 
 @dataclass

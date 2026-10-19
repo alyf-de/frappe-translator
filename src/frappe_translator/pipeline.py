@@ -30,7 +30,7 @@ from frappe_translator.po_handler import (
     read_pot_entries,
 )
 from frappe_translator.progress import ProgressTracker
-from frappe_translator.prompts import build_glossary_prompt, build_glossary_schema
+from frappe_translator.prompts import EXISTING_RULES, build_glossary_prompt, build_glossary_schema
 from frappe_translator.term_extractor import extract_terms
 from frappe_translator.translator import translate_entries
 from frappe_translator.validation import parse_claude_json
@@ -105,19 +105,24 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
 
     # Runtime glossary per app: merged chain files, then PO lookups fill gaps, then [terminology] wins.
     # PO lookups are not written back; they are recomputed each run.
+    # The curated glossary leaves out the PO lookups; fix-glossary checks existing translations against it.
     merged = {app.name: merge_chain(files, app_chain(app.name, app_names, config.app_priority)) for app in apps}
     all_terms = sorted({term for terms in merged.values() for term in terms})
     po_lookup = lookup_terms_batch(all_terms, all_po_paths)
     glossaries: dict[str, TermGlossary] = {}
+    curated_glossaries: dict[str, TermGlossary] = {}
     for app in apps:
         terms = merged[app.name]
+        curated = {term: dict(langs) for term, langs in terms.items()}
         for term, langs in terms.items():
             for lang, text in po_lookup[term].items():
                 langs.setdefault(lang, text)
         for lang, overlay in config.terminology.items():
             for term, text in overlay.items():
                 terms.setdefault(term, {})[lang] = text
+                curated.setdefault(term, {})[lang] = text
         glossaries[app.name] = TermGlossary(terms=terms)
+        curated_glossaries[app.name] = TermGlossary(terms=curated)
         logger.info("%s: glossary with %d terms", app.name, len(terms))
 
     # Process each app in dependency order
@@ -131,6 +136,7 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
             target_languages=target_languages,
             style_config=style_config,
             glossary=glossaries[app.name],
+            curated_glossary=curated_glossaries[app.name],
         )
         summary.app_results[app.name] = app_results
 
@@ -418,6 +424,7 @@ async def _process_app(
     target_languages: list[str],
     style_config: dict,
     glossary: TermGlossary,
+    curated_glossary: TermGlossary,
 ) -> AppResult:
     """Process a single app through the full pipeline."""
     result = AppResult(app_name=app.name)
@@ -447,32 +454,31 @@ async def _process_app(
     # Create POWriter early so filtering can reuse its loaded PO data
     po_writer = POWriter(app.po_paths)
 
-    # Filter entries based on run mode across the app's locales
-    # In fill-missing mode: include entry if ANY locale is missing it
-    # In review-existing mode: include entry if ANY locale has it
-    # In full-correct mode: include all entries
-    # Also track per-entry missing languages for fill-missing (to avoid overwriting existing)
-    missing_langs_per_entry: dict[tuple[str, str | None], set[str]] | None = None
-    if config.mode != "full-correct":
-        all_po_translations: dict[str, dict[tuple[str, str | None], str]] = {}
-        for lang in app_languages:
-            all_po_translations[lang] = po_writer.get_translations(lang)
-
-        filtered: list[TranslationEntry] = []
+    # Filter entries based on run mode across the app's locales, and track the languages per entry,
+    # so other locales are not overwritten:
+    # - fill-missing: the locales without a translation
+    # - fix-glossary: the locales whose translation does not contain the curated glossary translation of a term
+    # - review-existing: the locales with a translation
+    all_po_translations = {lang: po_writer.get_translations(lang) for lang in app_languages}
+    langs_per_entry: dict[tuple[str, str | None], set[str]] = {}
+    existing_per_entry: dict[tuple[str, str | None], dict[str, str]] = {}
+    filtered: list[TranslationEntry] = []
+    for entry in entries:
+        key = (entry.msgid, entry.msgctxt)
         if config.mode == "fill-missing":
-            missing_langs_per_entry = {}
-            for entry in entries:
-                key = (entry.msgid, entry.msgctxt)
-                missing = {lang for lang, po in all_po_translations.items() if not po.get(key, "")}
-                if missing:
-                    filtered.append(entry)
-                    missing_langs_per_entry[key] = missing
-        elif config.mode == "review-existing":
-            for entry in entries:
-                key = (entry.msgid, entry.msgctxt)
-                if any(po.get(key, "") for po in all_po_translations.values()):
-                    filtered.append(entry)
-        entries = filtered
+            missing = {lang for lang, po in all_po_translations.items() if not po.get(key, "")}
+            if missing:
+                filtered.append(entry)
+                langs_per_entry[key] = missing
+            continue
+        existing = {lang: po[key] for lang, po in all_po_translations.items() if po.get(key, "")}
+        if config.mode == "fix-glossary":
+            existing = _glossary_conflicts(curated_glossary.get_relevant_terms(entry.msgid), existing)
+        if existing:
+            filtered.append(entry)
+            langs_per_entry[key] = set(existing)
+            existing_per_entry[key] = existing
+    entries = filtered
 
     # Filter by progress — skip fully-done entries (only in fill-missing mode)
     if config.resume and config.mode == "fill-missing":
@@ -498,7 +504,9 @@ async def _process_app(
         glossary=glossary,
         target_languages=app_languages,
         style_config=app_style_config,
-        per_entry_languages=missing_langs_per_entry,
+        per_entry_languages=langs_per_entry,
+        existing_translations=existing_per_entry,
+        existing_rule=EXISTING_RULES.get(config.mode, ""),
     )
 
     # Translation with batched writes
@@ -512,6 +520,7 @@ async def _process_app(
         style_config=app_style_config,
         checkpoint_interval=config.checkpoint_interval,
         batch_size=config.batch_size,
+        existing_rule=EXISTING_RULES.get(config.mode, ""),
     )
 
     # Final flush
@@ -539,6 +548,20 @@ class AppResult:
         self.skipped_plural = 0
         self.skipped_done = 0
         self.skipped_failed = 0
+
+
+def _glossary_conflicts(terms: dict[str, dict[str, str]], existing: dict[str, str]) -> dict[str, str]:
+    """Return the existing translations that do not contain the glossary translation of a term in the msgid.
+
+    shortcut: a substring test, so an inflected form that changes the stem is a false conflict;
+    the review prompt then keeps the translation unchanged.
+    """
+    conflicts = {}
+    for lang, text in existing.items():
+        text_lower = text.lower()
+        if any(langs[lang].lower() not in text_lower for langs in terms.values() if lang in langs):
+            conflicts[lang] = text
+    return conflicts
 
 
 class PipelineSummary:

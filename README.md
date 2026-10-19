@@ -170,8 +170,10 @@ Older versions stored one bench-wide `<bench>/glossary.json`. The first run move
 | Mode | Description |
 |------|-------------|
 | `fill-missing` | Only translate entries with empty `msgstr` in any target locale (default) |
-| `review-existing` | Re-translate entries that already have translations |
-| `full-correct` | Re-translate all entries regardless of existing translations |
+| `fix-glossary` | Correct existing translations that do not use the curated glossary: the glossary files and `[terminology]`, not the term translations from PO files. A translation is sent only if it does not contain the glossary translation of a term in the string. Claude replaces the term, adapts the grammar around it and keeps the rest. |
+| `review-existing` | Review all existing translations. Claude keeps a correct translation unchanged (also an equivalent wording) and otherwise corrects it with as few changes as possible. This sends every translated string, so it costs much more than `fix-glossary`. |
+
+`fix-glossary` and `review-existing` write only the translations that Claude changed. Review the result with `git diff` in the app.
 
 ## Configuration
 

@@ -11,6 +11,8 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib  # ty: ignore[unresolved-import]
 
+MODES = ("fill-missing", "fix-glossary", "review-existing")
+
 
 @dataclass
 class StyleConfig:
@@ -76,6 +78,8 @@ def load_config(path: Path | None) -> TranslatorConfig:
 
     run = data.get("run", {})
     config.mode = run.get("mode", config.mode)
+    if config.mode not in MODES:
+        raise ValueError(f"[run] mode must be one of {', '.join(MODES)}, got {config.mode!r}")
     config.resume = run.get("resume", config.resume)
     config.apps = run.get("apps", config.apps)
     config.languages = run.get("languages", config.languages)

@@ -29,6 +29,7 @@ async def translate_entries(
     style_config: dict | None = None,
     checkpoint_interval: int = 50,
     batch_size: int = 50,
+    existing_rule: str = "",
 ) -> list[TranslationResult]:
     """Translate entries in batches using pre-assembled contexts.
 
@@ -60,7 +61,7 @@ async def translate_entries(
 
     async def _run_one(batch_idx: int) -> tuple[int, str | None]:
         batch, batch_langs = batches[batch_idx]
-        prompt = _build_batch_prompt(batch, batch_langs, style_config or {})
+        prompt = _build_batch_prompt(batch, batch_langs, style_config or {}, existing_rule)
         schema = build_translation_schema(batch_langs)
         try:
             raw = await runner.run(prompt, json_schema=schema)
@@ -93,6 +94,7 @@ async def translate_entries(
                 batch_skip += 1
                 continue
 
+            _drop_unchanged(result, ctx)
             results.append(result)
             batch_ok += len(result.translations)
             batch_err += len(result.errors)
@@ -147,6 +149,7 @@ async def translate_entries(
         async for ctx, raw in as_completed_logged(retries, f"Retries {app_name}", runner):
             entry_langs = ctx.target_languages or target_languages
             result = _process_single_result(ctx, raw, entry_langs)
+            _drop_unchanged(result, ctx)
             results.append(result)
 
             if result.translations:
@@ -168,6 +171,11 @@ async def translate_entries(
     )
 
     return results
+
+
+def _drop_unchanged(result: TranslationResult, ctx: AssembledContext) -> None:
+    """Keep only translations that differ from the existing ones, so a correction writes real changes only."""
+    result.translations = {lang: text for lang, text in result.translations.items() if text != ctx.existing.get(lang)}
 
 
 def _group_contexts_by_languages(
@@ -192,6 +200,7 @@ def _build_batch_prompt(
     batch: list[AssembledContext],
     target_languages: list[str],
     style_config: dict,
+    existing_rule: str = "",
 ) -> str:
     """Build a batch translation prompt from assembled contexts."""
     shared_glossary: dict[str, dict[str, str]] = {}
@@ -208,6 +217,7 @@ def _build_batch_prompt(
                 "msgid": ctx.entry.msgid,
                 "msgctxt": ctx.entry.msgctxt,
                 "comments": ctx.entry.comments,
+                "existing": ctx.existing,
                 "snippets_text": snippets_text,
                 "source_files": source_files,
             }
@@ -218,6 +228,7 @@ def _build_batch_prompt(
         shared_glossary=shared_glossary,
         target_languages=target_languages,
         style_config=style_config,
+        existing_rule=existing_rule,
     )
 
 

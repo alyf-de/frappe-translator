@@ -144,8 +144,8 @@ def filter_entries(
 
     Modes:
     - "fill-missing": entries missing or empty in po_translations
-    - "review-existing": entries with non-empty translations
-    - "full-correct": all entries
+    - "fix-glossary", "review-existing": entries with non-empty translations
+      (an upper bound for fix-glossary: the run only sends glossary conflicts)
     """
     result: list[TranslationEntry] = []
     for entry in entries:
@@ -157,13 +157,7 @@ def filter_entries(
         if mode == "fill-missing":
             if not existing:
                 result.append(entry)
-        elif mode == "review-existing":
-            if existing:
-                result.append(entry)
-        elif mode == "full-correct":
-            result.append(entry)
-        else:
-            logger.warning("Unknown filter mode %r, defaulting to full-correct", mode)
+        elif existing:
             result.append(entry)
     return result
 

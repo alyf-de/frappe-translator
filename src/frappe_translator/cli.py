@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 import click
 
+from frappe_translator.config import MODES
+
 if TYPE_CHECKING:
     from frappe_translator.config import TranslatorConfig
 
@@ -43,7 +45,7 @@ def main() -> None:
 @click.option("--exclude-language", "-x", multiple=True, help="Language to skip (repeatable, e.g. eo)")
 @click.option(
     "--mode",
-    type=click.Choice(["fill-missing", "review-existing", "full-correct"]),
+    type=click.Choice(MODES),
     default="fill-missing",
     help="Translation mode",
 )

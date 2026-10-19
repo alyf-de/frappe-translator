@@ -8,6 +8,22 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from frappe_translator.models import TranslationEntry
 
+# Instruction for the modes that send existing translations
+EXISTING_RULES = {
+    "fix-glossary": (
+        "Each string shows its existing translations, which do not use the glossary translation of a term in"
+        " the string. Replace that term with its glossary translation, adapt the grammar around it (case,"
+        " plural, articles) and keep the rest of the existing translation unchanged. If the translation already"
+        " uses the glossary term in another grammatical form, return it unchanged."
+    ),
+    "review-existing": (
+        "Each string shows its existing translations. Return an existing translation unchanged if it is"
+        " correct and uses the glossary terms; another form of a glossary term (case, plural, compound word)"
+        " or an equivalent correct wording also counts as correct. Otherwise, correct it with as few changes"
+        " as possible."
+    ),
+}
+
 
 def build_translation_schema(target_languages: list[str]) -> str:
     """Build a JSON Schema for the translation response.
@@ -87,6 +103,8 @@ def build_translation_prompt(
     glossary_terms: dict[str, dict[str, str]],
     target_languages: list[str],
     style_config: dict[str, Any],
+    existing: dict[str, str] | None = None,
+    existing_rule: str = "",
 ) -> str:
     """Build a prompt for translating a single string into multiple languages."""
     lines: list[str] = [
@@ -101,6 +119,9 @@ def build_translation_prompt(
 
     if entry.comments:
         lines.append(f"Comments: {chr(10).join(entry.comments)}")
+
+    if existing:
+        lines.append(f"Existing translations: {json.dumps(existing, ensure_ascii=False)}")
 
     if snippets_text:
         lines.append("")
@@ -152,11 +173,11 @@ def build_translation_prompt(
             "5. Match the tone and register of the original (error messages stay direct, help text stays friendly)",
             "6. In your response, echo `msgid` AND `msgctxt` verbatim (use null for `msgctxt` when the"
             " input shows it as null) — these together identify the source entry.",
-            "",
-            "## Target Languages",
-            ", ".join(target_languages),
         ]
     )
+    if existing:
+        lines.append(f"7. {existing_rule}")
+    lines.extend(["", "## Target Languages", ", ".join(target_languages)])
 
     return "\n".join(lines)
 
@@ -166,6 +187,7 @@ def build_batch_translation_prompt(
     shared_glossary: dict[str, dict[str, str]],
     target_languages: list[str],
     style_config: dict[str, Any],
+    existing_rule: str = "",
 ) -> str:
     """Build a prompt for translating multiple strings at once.
 
@@ -175,6 +197,7 @@ def build_batch_translation_prompt(
         shared_glossary: Union of all glossary terms across the batch.
         target_languages: Default target languages for the batch.
         style_config: Style instructions per language.
+        existing_rule: Instruction for entries that show their existing translations.
     """
     lines: list[str] = [
         "You are a professional software translator for a business application (Frappe/ERPNext).",
@@ -191,6 +214,8 @@ def build_batch_translation_prompt(
         " the entry. Two entries can share the same msgid with different msgctxt and need separate"
         " translations. Use null for `msgctxt` when the input shows it as null.",
     ]
+    if any(entry_info.get("existing") for entry_info in entries):
+        lines.append(f"7. {existing_rule}")
 
     if shared_glossary:
         lines.append("")
@@ -238,6 +263,9 @@ def build_batch_translation_prompt(
 
         if entry_info.get("comments"):
             lines.append(f"Comments: {chr(10).join(entry_info['comments'])}")
+
+        if entry_info.get("existing"):
+            lines.append(f"Existing translations: {json.dumps(entry_info['existing'], ensure_ascii=False)}")
 
         if entry_info.get("snippets_text"):
             lines.append(f"Source context:\n{entry_info['snippets_text']}")

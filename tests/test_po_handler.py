@@ -102,12 +102,6 @@ class TestFilterEntries:
         assert "Save" not in msgids
         assert "Hello World" not in msgids
 
-    def test_full_correct_returns_all_entries(self, tmp_bench: Path) -> None:
-        entries = self._pot_entries(tmp_bench)
-        po_trans = self._de_translations(tmp_bench)
-        filtered = filter_entries(entries, po_trans, "full-correct")
-        assert len(filtered) == 4
-
 
 class TestPOWriter:
     def test_buffer_translation_adds_to_locale(self, tmp_bench: Path) -> None:

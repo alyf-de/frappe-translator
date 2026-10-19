@@ -22,6 +22,8 @@ def assemble_contexts(
     target_languages: list[str],
     style_config: dict[str, Any],
     per_entry_languages: dict[tuple[str, str | None], set[str]] | None = None,
+    existing_translations: dict[tuple[str, str | None], dict[str, str]] | None = None,
+    existing_rule: str = "",
 ) -> list[AssembledContext]:
     """Assemble full translation context for each entry.
 
@@ -30,6 +32,8 @@ def assemble_contexts(
 
     If per_entry_languages is provided, each entry's prompt only requests translation
     into the specified languages (used by fill-missing to skip already-translated locales).
+    If existing_translations is provided, each prompt shows them with ``existing_rule``
+    (used by fix-glossary and review-existing).
     """
     file_cache: dict[str, list[str] | None] = {}
 
@@ -53,6 +57,7 @@ def assemble_contexts(
         else:
             entry_languages = target_languages
             entry_style = style_config
+        existing = (existing_translations or {}).get((entry.msgid, entry.msgctxt), {})
 
         prompt = build_translation_prompt(
             entry=entry,
@@ -60,6 +65,8 @@ def assemble_contexts(
             glossary_terms=glossary_terms,
             target_languages=entry_languages,
             style_config=entry_style,
+            existing=existing,
+            existing_rule=existing_rule,
         )
 
         assembled.append(
@@ -69,6 +76,7 @@ def assemble_contexts(
                 glossary_terms=glossary_terms,
                 prompt=prompt,
                 target_languages=entry_languages,
+                existing=existing,
             )
         )
 

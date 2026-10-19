@@ -10,7 +10,7 @@ from frappe_translator import pipeline
 from frappe_translator.config import TranslatorConfig
 from frappe_translator.discovery import discover_bench, resolve_app_order
 from frappe_translator.glossary import load_glossary_file, migrate_bench_glossary
-from frappe_translator.po_handler import read_pot_entries
+from frappe_translator.po_handler import read_po_translations, read_pot_entries
 from tests.test_translator import RecordingRunner, _default_response
 
 if TYPE_CHECKING:
@@ -200,3 +200,75 @@ async def test_logs_stats_line(
     assert len(stats) == 1
     assert stats[0].startswith("Stats: model=haiku, mode=fill-missing, concurrency=5, batch_size=50, timeout=120s,")
     assert stats[0].endswith("0 failed, 0 rate limit backoffs")
+
+
+async def test_fix_glossary_corrects_only_curated_conflicts(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    glossary = {
+        "Invoice": {"de": {"text": "Faktura", "source": "manual"}},
+        "Cancel": {"de": {"text": "Abbrechen", "source": "manual"}},
+    }
+    _write_glossary(tmp_bench, "sample_app", glossary)
+    runner = BatchRecordingRunner(_default_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, mode="fix-glossary", resume=False))
+
+    # "Cancel" already uses the glossary term, and the fr PO file has no translations
+    [(prompt, schema)] = runner.calls
+    assert 'Existing translations: {"de": "Rechnung {0} wurde eingereicht"}' in prompt
+    assert "Replace that term with its glossary translation" in prompt
+    assert "### String 2" not in prompt
+    assert json.loads(schema)["properties"]["translations"]["items"]["required"] == ["msgid", "msgctxt", "de"]
+    de_po = read_po_translations(tmp_bench / "apps" / "sample_app" / "sample_app" / "locale" / "de.po")
+    assert de_po[("Invoice {0} has been submitted", None)] == "Invoice {0} has been submitted::de"
+    assert de_po[("Cancel", None)] == "Abbrechen"
+
+
+async def test_fix_glossary_keeps_translation_the_model_returns_unchanged(
+    tmp_bench: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_glossary(tmp_bench, "sample_app", {"Invoice": {"de": {"text": "Faktura", "source": "manual"}}})
+    unchanged = {"msgid": "Invoice {0} has been submitted", "msgctxt": None, "de": "Rechnung {0} wurde eingereicht"}
+    runner = BatchRecordingRunner(lambda _prompt, _schema: json.dumps({"translations": [unchanged]}))
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+    de_path = tmp_bench / "apps" / "sample_app" / "sample_app" / "locale" / "de.po"
+    before = de_path.read_text()
+
+    summary = await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, mode="fix-glossary", resume=False))
+
+    assert len(runner.calls) == 1
+    assert summary.app_results["sample_app"].translated == 0
+    assert de_path.read_text() == before
+
+
+async def test_review_existing_sends_all_existing_translations(
+    tmp_bench: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = BatchRecordingRunner(_default_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, mode="review-existing", resume=False))
+
+    # Both de translations are reviewed without a glossary conflict; fr has none
+    [(prompt, _schema)] = runner.calls
+    assert 'Existing translations: {"de": "Rechnung {0} wurde eingereicht"}' in prompt
+    assert 'Existing translations: {"de": "Abbrechen"}' in prompt
+    assert "Return an existing translation unchanged if it is correct" in prompt
+    assert '"Save"' not in prompt
+
+
+async def test_fix_glossary_ignores_term_translations_from_po_files(
+    tmp_bench: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # frappe translates the term "Invoice" as "Faktura", but no glossary file has a translation
+    _add_app(tmp_bench, "frappe", ["Invoice"])
+    (tmp_bench / "apps" / "frappe" / "frappe" / "locale" / "de.po").write_text(
+        'msgid ""\nmsgstr ""\n"Content-Type: text/plain; charset=utf-8\\n"\n\nmsgid "Invoice"\nmsgstr "Faktura"\n'
+    )
+    _write_glossary(tmp_bench, "sample_app", {"Invoice": {}})
+    runner = BatchRecordingRunner(_default_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, mode="fix-glossary", resume=False))
+
+    assert not runner.calls
