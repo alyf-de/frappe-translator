@@ -104,6 +104,12 @@ If you have write access to an app repository, you can push to it directly. Then
 
 ## 5. Configure
 
+Clone the shared glossaries. They are tracked in [alyf-de/glossaries](https://github.com/alyf-de/glossaries):
+
+```bash
+git clone https://github.com/alyf-de/glossaries ~/translate/glossaries
+```
+
 Create `~/translate/frappe-translator.toml`. Lower the concurrency to fit 4 GB RAM. The token limit is the bottleneck, not parallelism, so this costs little speed.
 
 ```toml

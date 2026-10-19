@@ -131,7 +131,7 @@ frappe-translator clear-progress /path/to/bench
 
 ### Glossary
 
-Each app has an optional glossary file `<glossary_dir>/<app>.json`. The default `glossary_dir` is `<bench>/glossaries`. Change it with `glossary_dir` in `[general]` or with `--glossary-dir`. Use a git-versioned folder that all runs share, so that curated translations are reviewed and kept.
+Each app has an optional glossary file `<glossary_dir>/<app>.json`. The default `glossary_dir` is `<bench>/glossaries`. Change it with `glossary_dir` in `[general]` or with `--glossary-dir`. Use a git-versioned folder that all runs share, so that curated translations are reviewed and kept. The shared glossaries for the Frappe apps are tracked in [alyf-de/glossaries](https://github.com/alyf-de/glossaries).
 
 ```json
 {
