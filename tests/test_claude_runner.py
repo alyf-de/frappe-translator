@@ -6,12 +6,16 @@ import asyncio
 import io
 import json
 import logging
+import os
+import time
 from typing import TYPE_CHECKING
 
 from frappe_translator import claude_runner
 from frappe_translator.claude_runner import ClaudeRunner, as_completed_logged
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
 
@@ -109,3 +113,35 @@ async def test_error_envelope_with_status_429_is_retried(monkeypatch: pytest.Mon
 
     assert await runner.run("prompt") == success
     assert not outputs
+
+
+_FAKE_CLAUDE = """#!/usr/bin/env python3
+import json, select, sys
+# Like the claude CLI: give up if the prompt is not on stdin soon after the start
+ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+if not ready:
+    print("Error: Input must be provided either through stdin", file=sys.stderr)
+    sys.exit(1)
+print(json.dumps({"is_error": False, "result": sys.stdin.read()}))
+"""
+
+
+async def test_prompt_is_on_stdin_even_when_the_event_loop_is_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = tmp_path / "claude"
+    fake.write_text(_FAKE_CLAUDE)
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    create = asyncio.create_subprocess_exec
+
+    async def create_then_block(*args: object, **kwargs: object) -> asyncio.subprocess.Process:
+        process = await create(*args, **kwargs)
+        time.sleep(0.5)  # Other work blocks the event loop before the prompt is written
+        return process
+
+    monkeypatch.setattr(claude_runner.asyncio, "create_subprocess_exec", create_then_block)
+
+    output = await ClaudeRunner(timeout=10).run("the prompt")
+
+    assert json.loads(output)["result"] == "the prompt"

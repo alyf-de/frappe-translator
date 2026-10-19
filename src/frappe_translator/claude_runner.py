@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import sys
+import tempfile
 from asyncio.subprocess import PIPE
 from typing import TYPE_CHECKING, TypeVar
 
@@ -115,26 +116,28 @@ class ClaudeRunner:
             try:
                 model_args = ["--model", self.model] if self.model else []
                 schema_args = ["--json-schema", json_schema] if json_schema else []
-                process = await asyncio.create_subprocess_exec(
-                    "claude",
-                    "-p",
-                    "--output-format",
-                    "json",
-                    "--tools",
-                    "",
-                    "--disable-slash-commands",
-                    "--no-session-persistence",
-                    *model_args,
-                    *schema_args,
-                    stdin=PIPE,
-                    stdout=PIPE,
-                    stderr=PIPE,
-                )
-                try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                        process.communicate(input=prompt.encode("utf-8")),
-                        timeout=self.timeout,
+                # The CLI gives up after 3s without stdin data. A pipe gets the prompt only when the event
+                # loop gets to it, so a busy loop could miss that; a file has the prompt ready at the start.
+                with tempfile.TemporaryFile() as prompt_file:
+                    prompt_file.write(prompt.encode("utf-8"))
+                    prompt_file.seek(0)
+                    process = await asyncio.create_subprocess_exec(
+                        "claude",
+                        "-p",
+                        "--output-format",
+                        "json",
+                        "--tools",
+                        "",
+                        "--disable-slash-commands",
+                        "--no-session-persistence",
+                        *model_args,
+                        *schema_args,
+                        stdin=prompt_file,
+                        stdout=PIPE,
+                        stderr=PIPE,
                     )
+                try:
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=self.timeout)
                 except asyncio.TimeoutError:
                     process.kill()
                     await process.wait()
