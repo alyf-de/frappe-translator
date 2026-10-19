@@ -60,6 +60,7 @@ class ClaudeRunner:
         self._semaphore = asyncio.Semaphore(concurrency)
         self.total_calls = 0
         self.errors = 0
+        self.rate_limit_hits = 0
         self._backoff_lock = asyncio.Lock()
         self._backoff_until = 0.0  # asyncio event loop time when backoff expires
         self.running_since: dict[object, float] = {}  # event loop start time of each running call
@@ -75,6 +76,7 @@ class ClaudeRunner:
 
     async def _set_backoff(self, retry: int) -> None:
         """Set a global backoff after a rate limit hit."""
+        self.rate_limit_hits += 1
         async with self._backoff_lock:
             delay = _INITIAL_BACKOFF * (_BACKOFF_MULTIPLIER**retry)
             loop = asyncio.get_running_loop()
@@ -210,10 +212,10 @@ async def as_completed_logged(aws: Iterable[Awaitable[T]], label: str, runner: C
             parts = []
             if runner.running_since:
                 longest = now - min(runner.running_since.values())
-                parts.append(f"{len(runner.running_since)} running, longest {_duration(longest)}")
-            parts.append(f"elapsed {_duration(elapsed)}")
+                parts.append(f"{len(runner.running_since)} running, longest {format_duration(longest)}")
+            parts.append(f"elapsed {format_duration(elapsed)}")
             if 0 < finished < total:
-                parts.append(f"ETA ~{_duration(elapsed / finished * (total - finished))}")
+                parts.append(f"ETA ~{format_duration(elapsed / finished * (total - finished))}")
             status = ", ".join(parts)
             if bar:
                 bar.update(len(done), status)
@@ -221,7 +223,7 @@ async def as_completed_logged(aws: Iterable[Awaitable[T]], label: str, runner: C
                 logger.info("%s: %d/%d batches (%d%%), %s", label, finished, total, finished * 100 // total, status)
 
 
-def _duration(seconds: float) -> str:
+def format_duration(seconds: float) -> str:
     minutes, secs = divmod(int(seconds), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m{secs:02d}s"

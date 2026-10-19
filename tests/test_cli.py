@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -9,7 +10,7 @@ if TYPE_CHECKING:
 
 from click.testing import CliRunner
 
-from frappe_translator.cli import main
+from frappe_translator.cli import _setup_logging, main
 
 
 class TestHelp:
@@ -149,3 +150,22 @@ class TestBackfill:
         assert result.exit_code == 0, result.output
         assert "app de: 1 translations copied" in result.output
         assert 'msgstr "Speichern"' in (tmp_path / "hotfix/apps/app/app/locale/de.po").read_text()
+
+
+def test_setup_logging_appends_to_log_file(tmp_path: Path) -> None:
+    log_file = tmp_path / "frappe-translator.log"
+    root = logging.getLogger()
+    handlers = list(root.handlers)
+    level = root.level
+    try:
+        # pytest has root handlers already, so basicConfig does not set the level
+        root.setLevel(logging.INFO)
+        _setup_logging(verbose=False, log_file=log_file)
+        logging.getLogger("frappe_translator.test").info("Stats: first run")
+    finally:
+        for handler in set(root.handlers) - set(handlers):
+            handler.close()
+            root.removeHandler(handler)
+        root.setLevel(level)
+
+    assert "[INFO] frappe_translator.test: Stats: first run" in log_file.read_text()

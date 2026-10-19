@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING
 
 from frappe_translator import pipeline
@@ -184,3 +185,18 @@ async def test_changed_glossary_dir_extracts_terms_again(tmp_bench: Path) -> Non
     assert json.loads((new_dir / "sample_app.json").read_text()) == json.loads(
         (old_dir / "sample_app.json").read_text()
     )
+
+
+async def test_logs_stats_line(
+    tmp_bench: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    runner = BatchRecordingRunner(_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    with caplog.at_level(logging.INFO):
+        await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, model="haiku", resume=False))
+
+    stats = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Stats:")]
+    assert len(stats) == 1
+    assert stats[0].startswith("Stats: model=haiku, mode=fill-missing, concurrency=5, batch_size=50, timeout=120s,")
+    assert stats[0].endswith("0 failed, 0 rate limit backoffs")

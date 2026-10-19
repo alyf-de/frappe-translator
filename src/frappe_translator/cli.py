@@ -14,14 +14,19 @@ if TYPE_CHECKING:
     from frappe_translator.config import TranslatorConfig
 
 
-def _setup_logging(verbose: bool) -> None:
-    """Configure logging for the CLI."""
+def _setup_logging(verbose: bool, log_file: Path | None = None) -> None:
+    """Configure logging for the CLI. With ``log_file``, also append the log lines to that file."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    if log_file:
+        # The file keeps the date, so runs from different days can be compared
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
 
 
 @click.group()
@@ -74,7 +79,7 @@ def translate(
     verbose: bool,
 ) -> None:
     """Translate Frappe app strings using Claude."""
-    _setup_logging(verbose)
+    _setup_logging(verbose, bench_path / "frappe-translator.log")
 
     from frappe_translator.config import load_config
 
@@ -168,7 +173,7 @@ def glossary(
     else:
         raise click.UsageError(f"--model must be a sonnet or opus model, got {model!r}")
 
-    _setup_logging(verbose)
+    _setup_logging(verbose, bench_path / "frappe-translator.log")
 
     from frappe_translator.config import load_config
 

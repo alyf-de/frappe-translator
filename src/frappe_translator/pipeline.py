@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import TYPE_CHECKING
 
 from frappe_translator._io import atomic_json_write
-from frappe_translator.claude_runner import ClaudeRunner, as_completed_logged
+from frappe_translator.claude_runner import ClaudeRunner, as_completed_logged, format_duration
 from frappe_translator.context_assembler import assemble_contexts
 from frappe_translator.discovery import discover_bench, get_app_languages, get_target_languages, resolve_app_order
 from frappe_translator.glossary import (
@@ -48,6 +49,7 @@ MIN_TERM_STRINGS = 5
 
 async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
     """Run the full translation pipeline."""
+    start = time.monotonic()
     summary = PipelineSummary()
 
     # Discover bench and apps
@@ -134,6 +136,25 @@ async def run_pipeline(config: TranslatorConfig) -> PipelineSummary:
 
     # Print summary
     summary.log_summary()
+    elapsed = time.monotonic() - start
+    translated = sum(result.translated for result in summary.app_results.values())
+    # One line per run, so runs with different settings can be compared from the log
+    logger.info(
+        "Stats: model=%s, mode=%s, concurrency=%d, batch_size=%d, timeout=%ds, %d languages, "
+        "%d translations in %s (%.0f/min), %d claude calls, %d failed, %d rate limit backoffs",
+        config.model,
+        config.mode,
+        config.concurrency,
+        config.batch_size,
+        config.timeout,
+        len(target_languages),
+        translated,
+        format_duration(elapsed),
+        translated / elapsed * 60,
+        runner.total_calls,
+        runner.errors,
+        runner.rate_limit_hits,
+    )
     return summary
 
 
@@ -144,6 +165,7 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
 
     A (term, lang) pair is written only if it has no entry or its source ranks lower than ``tier``.
     """
+    start = time.monotonic()
     all_apps = discover_bench(config.bench_path)
     if not all_apps:
         logger.error("No apps with POT files found in %s", config.bench_path)
@@ -161,7 +183,8 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
         seed_glossary(files, apps, all_apps_ordered[0].name, config.app_priority)
 
     pot_entries = {app.name: read_pot_entries(app.pot_path) for app in apps}
-    await extract_new_terms(config, apps, files, _extract_runner(config), pot_entries)
+    extract_runner = _extract_runner(config)
+    await extract_new_terms(config, apps, files, extract_runner, pot_entries)
 
     usage = {app.name: _term_usage(files[app.name], pot_entries[app.name]) for app in apps}
     for app in apps:
@@ -194,6 +217,21 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
             runner,
             config,
         )
+    logger.info(
+        "Stats: model=%s, extract_model=%s, concurrency=%d, batch_size=%d, timeout=%ds, %d languages, "
+        "%d failed batches in %s, %d claude calls, %d failed, %d rate limit backoffs",
+        config.model,
+        config.extract_model or config.model,
+        config.concurrency,
+        config.batch_size,
+        config.timeout,
+        len(target_languages),
+        failed,
+        format_duration(time.monotonic() - start),
+        runner.total_calls + extract_runner.total_calls,
+        runner.errors + extract_runner.errors,
+        runner.rate_limit_hits + extract_runner.rate_limit_hits,
+    )
     return failed
 
 

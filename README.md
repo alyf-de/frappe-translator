@@ -101,6 +101,14 @@ frappe-translator status /path/to/bench
 frappe-translator translate /path/to/bench --dry-run
 ```
 
+### Logs
+
+`translate` and `glossary` also append their log to `<bench>/frappe-translator.log`. At the end of each run, they log one `Stats:` line with the settings, the duration, the number of Claude calls, failed calls and rate limit backoffs. To compare runs with different settings:
+
+```bash
+grep "Stats:" /path/to/bench/frappe-translator.log
+```
+
 ### Clear progress (start fresh)
 
 ```bash
