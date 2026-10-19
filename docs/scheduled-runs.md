@@ -77,6 +77,19 @@ for APP in frappe erpnext hrms; do
 done
 ```
 
+Some apps are translated only on `develop`. Add them to the `develop` bench only:
+
+```bash
+for APP in builder crm suite helpdesk insights lending lms; do
+  git clone --filter=blob:none --no-checkout --origin upstream "https://github.com/frappe/$APP" ~/translate/repos/$APP
+  cd ~/translate/repos/$APP
+  git checkout --detach -q upstream/HEAD
+  git remote add origin "https://github.com/<your-fork-org>/$APP"
+  gh repo set-default "frappe/$APP"
+  git worktree add ~/translate/develop/apps/$APP upstream/develop -B develop
+done
+```
+
 The result:
 
 ```
