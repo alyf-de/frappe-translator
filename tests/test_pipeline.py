@@ -272,3 +272,33 @@ async def test_fix_glossary_ignores_term_translations_from_po_files(
     await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, mode="fix-glossary", resume=False))
 
     assert not runner.calls
+
+
+async def test_fix_glossary_batches_per_language(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fr_path = tmp_bench / "apps" / "sample_app" / "sample_app" / "locale" / "fr.po"
+    fr_path.write_text(
+        fr_path.read_text().replace(
+            'msgid "Invoice {0} has been submitted"\nmsgstr ""',
+            'msgid "Invoice {0} has been submitted"\nmsgstr "Note {0}"',
+        )
+    )
+    glossary = {
+        "Invoice": {"de": {"text": "Faktura", "source": "manual"}, "fr": {"text": "Facture", "source": "manual"}},
+        "Cancel": {"de": {"text": "Stornieren", "source": "manual"}},
+    }
+    _write_glossary(tmp_bench, "sample_app", glossary)
+    runner = BatchRecordingRunner(_default_response)
+    monkeypatch.setattr(pipeline, "ClaudeRunner", lambda **_: runner)
+
+    await pipeline.run_pipeline(TranslatorConfig(bench_path=tmp_bench, mode="fix-glossary", resume=False))
+
+    # "Invoice ..." conflicts in de and fr, "Cancel" only in de: one batch per language, not per language set
+    batches = {}
+    for prompt, schema in runner.calls:
+        [lang] = json.loads(schema)["properties"]["translations"]["items"]["required"][2:]
+        batches[lang] = prompt
+    assert sorted(batches) == ["de", "fr"]
+    assert "### String 2" in batches["de"]
+    assert "### String 2" not in batches["fr"]
+    # The glossary shows only the batch language
+    assert '"Invoice": {"fr": "Facture"}' in batches["fr"]

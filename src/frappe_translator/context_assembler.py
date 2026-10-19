@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
-from frappe_translator.models import AssembledContext, TermGlossary, TranslationEntry
+from frappe_translator.models import AssembledContext, SourceSnippet, TermGlossary, TranslationEntry
 from frappe_translator.prompts import build_translation_prompt
 from frappe_translator.source_context import extract_snippets, format_snippets, select_diverse_snippets
 
@@ -24,6 +24,7 @@ def assemble_contexts(
     per_entry_languages: dict[tuple[str, str | None], set[str]] | None = None,
     existing_translations: dict[tuple[str, str | None], dict[str, str]] | None = None,
     existing_rule: str = "",
+    split_languages: bool = False,
 ) -> list[AssembledContext]:
     """Assemble full translation context for each entry.
 
@@ -34,6 +35,9 @@ def assemble_contexts(
     into the specified languages (used by fill-missing to skip already-translated locales).
     If existing_translations is provided, each prompt shows them with ``existing_rule``
     (used by fix-glossary and review-existing).
+    With split_languages, each entry gets one context per language, with the glossary of that language only.
+    Batches need the same languages for all entries, so this keeps them full when each entry needs a
+    different subset of languages.
     """
     file_cache: dict[str, list[str] | None] = {}
 
@@ -59,25 +63,55 @@ def assemble_contexts(
             entry_style = style_config
         existing = (existing_translations or {}).get((entry.msgid, entry.msgctxt), {})
 
-        prompt = build_translation_prompt(
-            entry=entry,
-            snippets_text=snippets_text,
-            glossary_terms=glossary_terms,
-            target_languages=entry_languages,
-            style_config=entry_style,
-            existing=existing,
-            existing_rule=existing_rule,
-        )
-
-        assembled.append(
-            AssembledContext(
-                entry=entry,
-                snippets=snippets,
-                glossary_terms=glossary_terms,
-                prompt=prompt,
-                target_languages=entry_languages,
-                existing=existing,
+        if not split_languages:
+            assembled.append(
+                _context(
+                    entry,
+                    snippets,
+                    snippets_text,
+                    glossary_terms,
+                    entry_languages,
+                    entry_style,
+                    existing,
+                    existing_rule,
+                )
             )
-        )
+            continue
+        for lang in entry_languages:
+            lang_terms = {term: {lang: langs[lang]} for term, langs in glossary_terms.items() if lang in langs}
+            lang_style = {lang: entry_style[lang]} if lang in entry_style else {}
+            lang_existing = {lang: existing[lang]} if lang in existing else {}
+            assembled.append(
+                _context(entry, snippets, snippets_text, lang_terms, [lang], lang_style, lang_existing, existing_rule)
+            )
 
     return assembled
+
+
+def _context(
+    entry: TranslationEntry,
+    snippets: list[SourceSnippet],
+    snippets_text: str,
+    glossary_terms: dict[str, dict[str, str]],
+    languages: list[str],
+    style_config: dict[str, Any],
+    existing: dict[str, str],
+    existing_rule: str,
+) -> AssembledContext:
+    prompt = build_translation_prompt(
+        entry=entry,
+        snippets_text=snippets_text,
+        glossary_terms=glossary_terms,
+        target_languages=languages,
+        style_config=style_config,
+        existing=existing,
+        existing_rule=existing_rule,
+    )
+    return AssembledContext(
+        entry=entry,
+        snippets=snippets,
+        glossary_terms=glossary_terms,
+        prompt=prompt,
+        target_languages=languages,
+        existing=existing,
+    )

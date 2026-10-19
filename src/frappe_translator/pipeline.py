@@ -507,6 +507,7 @@ async def _process_app(
         per_entry_languages=langs_per_entry,
         existing_translations=existing_per_entry,
         existing_rule=EXISTING_RULES.get(config.mode, ""),
+        split_languages=config.mode != "fill-missing",
     )
 
     # Translation with batched writes
