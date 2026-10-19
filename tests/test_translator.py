@@ -1,4 +1,4 @@
-"""Tests for Pass 2 translation orchestration, especially language grouping."""
+"""Tests for translation orchestration, especially language grouping."""
 
 from __future__ import annotations
 

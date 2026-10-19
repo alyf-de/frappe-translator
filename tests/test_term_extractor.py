@@ -1,4 +1,4 @@
-"""Tests for Pass 1 term extraction."""
+"""Tests for term extraction."""
 
 from __future__ import annotations
 

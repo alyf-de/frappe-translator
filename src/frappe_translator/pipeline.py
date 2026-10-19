@@ -330,7 +330,7 @@ async def extract_new_terms(
     runner: ClaudeRunner,
     pot_cache: dict[str, list[TranslationEntry]],
 ) -> None:
-    """Pass 1: add newly extracted terms to each app's glossary file as {}.
+    """Add newly extracted terms to each app's glossary file as {}.
 
     ``files`` holds the glossary files of all apps; it is updated in place.
     ``pot_cache`` receives the POT entries of ``apps``.
@@ -353,11 +353,11 @@ async def extract_new_terms(
         done = set(extracted.get(app.name, []))
         non_plural = [e for e in entries if not e.is_plural]
         uncovered = [e for e in non_plural if e.msgid not in done]
-        logger.info("Pass 1 %s: %d/%d entries need term extraction", app.name, len(uncovered), len(non_plural))
+        logger.info("%s: %d/%d entries need term extraction", app.name, len(uncovered), len(non_plural))
         if not uncovered:
             continue
 
-        extracted_terms = await extract_terms(uncovered, runner, config.batch_size, f"Pass 1 {app.name}")
+        extracted_terms = await extract_terms(uncovered, runner, config.batch_size, f"Terms {app.name}")
         known = {term.lower() for a in app_chain(app.name, app_names, config.app_priority) for term in files[a]}
         new_terms = []
         for term in extracted_terms.terms:
@@ -465,7 +465,7 @@ async def _process_app(
         per_entry_languages=missing_langs_per_entry,
     )
 
-    # Pass 2: Translation with batched writes
+    # Translation with batched writes
     translation_results = await translate_entries(
         contexts=contexts,
         runner=runner,

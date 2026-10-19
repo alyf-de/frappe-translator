@@ -1,4 +1,4 @@
-"""Pass 2: Batched translation via claude CLI."""
+"""Batched translation via claude CLI."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ async def translate_entries(
             batches.append((group_contexts[i : i + batch_size], langs_list))
 
     logger.info(
-        "Pass 2: Translating %d entries in %d batches across %d unique language sets",
+        "Translating %d entries in %d batches across %d unique language sets",
         len(contexts),
         len(batches),
         len(groups),
@@ -78,7 +78,7 @@ async def translate_entries(
     total_errors = 0
     batches_done = 0
 
-    async for batch_idx, raw in as_completed_logged(runs, f"Pass 2 {app_name}", runner):
+    async for batch_idx, raw in as_completed_logged(runs, f"Translate {app_name}", runner):
         batch, batch_langs = batches[batch_idx]
         batches_done += 1
 
@@ -161,7 +161,7 @@ async def translate_entries(
     errored = sum(1 for r in results if r.errors)
     skipped = sum(1 for r in results if r.skipped)
     logger.info(
-        "Pass 2 complete: %d translated, %d with errors, %d skipped",
+        "Translation complete: %d translated, %d with errors, %d skipped",
         translated,
         errored,
         skipped,

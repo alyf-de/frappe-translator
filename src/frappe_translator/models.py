@@ -83,7 +83,7 @@ class TranslationResult:
 
 @dataclass
 class AssembledContext:
-    """Fully assembled context for a Pass 2 translation prompt."""
+    """Fully assembled context for a translation prompt."""
 
     entry: TranslationEntry
     snippets: list[SourceSnippet] = field(default_factory=list)

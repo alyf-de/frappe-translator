@@ -1,4 +1,4 @@
-"""Prompt templates for Pass 1 (term extraction) and Pass 2 (translation)."""
+"""Prompt templates for term extraction and translation."""
 
 from __future__ import annotations
 
