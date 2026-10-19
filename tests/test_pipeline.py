@@ -9,6 +9,7 @@ from frappe_translator import pipeline
 from frappe_translator.config import TranslatorConfig
 from frappe_translator.discovery import discover_bench, resolve_app_order
 from frappe_translator.glossary import load_glossary_file, migrate_bench_glossary
+from frappe_translator.po_handler import read_pot_entries
 from tests.test_translator import RecordingRunner, _default_response
 
 if TYPE_CHECKING:
@@ -85,7 +86,8 @@ async def _extract(config: TranslatorConfig, runner: BatchRecordingRunner) -> No
     all_apps = resolve_app_order(discover_bench(config.bench_path), config.app_priority)
     apps = [a for a in all_apps if a.name in config.apps] if config.apps else all_apps
     files = {app.name: load_glossary_file(config.get_glossary_dir(), app.name) for app in all_apps}
-    await pipeline.extract_new_terms(config, apps, files, runner, {})
+    pot_entries = {app.name: read_pot_entries(app.pot_path) for app in apps}
+    await pipeline.extract_new_terms(config, apps, files, runner, pot_entries)
 
 
 async def test_translate_does_not_extract_terms(tmp_bench: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -160,10 +160,10 @@ async def run_glossary(config: TranslatorConfig, tier: str, seed: bool = False) 
     if seed:
         seed_glossary(files, apps, all_apps_ordered[0].name, config.app_priority)
 
-    pot_cache: dict[str, list[TranslationEntry]] = {}
-    await extract_new_terms(config, apps, files, _extract_runner(config), pot_cache)
+    pot_entries = {app.name: read_pot_entries(app.pot_path) for app in apps}
+    await extract_new_terms(config, apps, files, _extract_runner(config), pot_entries)
 
-    usage = {app.name: _term_usage(files[app.name], pot_cache[app.name]) for app in apps}
+    usage = {app.name: _term_usage(files[app.name], pot_entries[app.name]) for app in apps}
     for app in apps:
         rare = [
             term
@@ -328,12 +328,12 @@ async def extract_new_terms(
     apps: list[AppInfo],
     files: dict[str, GlossaryFile],
     runner: ClaudeRunner,
-    pot_cache: dict[str, list[TranslationEntry]],
+    pot_entries: dict[str, list[TranslationEntry]],
 ) -> None:
     """Add newly extracted terms to each app's glossary file as {}.
 
     ``files`` holds the glossary files of all apps; it is updated in place.
-    ``pot_cache`` receives the POT entries of ``apps``.
+    ``pot_entries`` holds the POT entries of ``apps``.
     """
     bench_path = config.bench_path
     glossary_dir = config.get_glossary_dir()
@@ -347,9 +347,7 @@ async def extract_new_terms(
     extracted: dict[str, list[str]] = cache.get("apps", {})
 
     for app in apps:
-        # Cache POT entries so _process_app doesn't re-parse them.
-        entries = read_pot_entries(app.pot_path)
-        pot_cache[app.name] = entries
+        entries = pot_entries[app.name]
         done = set(extracted.get(app.name, []))
         non_plural = [e for e in entries if not e.is_plural]
         uncovered = [e for e in non_plural if e.msgid not in done]
