@@ -40,6 +40,12 @@ class TestExtractSnippets:
         snippets = extract_snippets(entry, app_path)
         assert snippets == []
 
+    def test_skips_reference_past_the_end_of_the_file(self, tmp_bench: Path) -> None:
+        app_path = tmp_bench / "apps" / "sample_app"
+        entry = _entry("Invoice {0} has been submitted", ["sample_app/module/file.py:42"])
+        snippets = extract_snippets(entry, app_path)
+        assert snippets == []
+
     def test_handles_line_number_zero(self, tmp_bench: Path) -> None:
         app_path = tmp_bench / "apps" / "sample_app"
         entry = _entry("Something", ["sample_app/module/file.py:0"])

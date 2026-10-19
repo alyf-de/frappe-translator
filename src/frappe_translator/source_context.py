@@ -93,6 +93,10 @@ def extract_snippets(
         start = max(0, line_number - 6)  # 0-indexed, 5 lines before
         end = min(len(lines), line_number + 5)  # 5 lines after (line_number is 1-indexed)
         content = "\n".join(lines[start:end])
+        if not content.strip():
+            # The line is past the end of the file, or only blank lines are around it
+            logger.debug("Skipping empty snippet for source ref: %r", ref)
+            continue
 
         snippets.append(SourceSnippet(file_path=file_part, line_number=line_number, content=content))
 
