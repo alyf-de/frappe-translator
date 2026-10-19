@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING
 
@@ -83,7 +84,9 @@ def _patch_entry(block: str, updates: dict[tuple[str, str | None], str], patched
     if key not in updates:
         return block
     start, end = spans["msgstr"]
-    lines[start:end] = [f"msgstr {escape(updates[key])}"]
+    # Like Frappe's PO files, each line of a multi-line msgstr gets its own string
+    msgstr_lines = re.findall(r"[^\n]*\n|[^\n]+", updates[key]) or [""]
+    lines[start:end] = [f"msgstr {escape(msgstr_lines[0])}", *(escape(line) for line in msgstr_lines[1:])]
     patched.add(key)
     return "\n".join(lines)
 

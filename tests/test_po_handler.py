@@ -155,7 +155,8 @@ class TestPOWriter:
             msgstr ""
 
             #: frappe/b.py:2
-            msgid "Line one\\nLine two"
+            msgid "Line one\\n"
+            "Line two"
             msgstr ""
 
             msgctxt "Verb"
@@ -182,8 +183,9 @@ class TestPOWriter:
         expected = (
             original.replace('msgid "Hello {0}"\nmsgstr ""', 'msgid "Hello {0}"\nmsgstr "Hallo {0}"')
             .replace(
-                'msgid "Line one\\nLine two"\nmsgstr ""',
-                'msgid "Line one\\nLine two"\nmsgstr "Zeile \\"eins\\"\\nZeile zwei"',
+                # Like Frappe's PO files, each line of a multi-line msgstr gets its own string
+                'msgid "Line one\\n"\n"Line two"\nmsgstr ""',
+                'msgid "Line one\\n"\n"Line two"\nmsgstr "Zeile \\"eins\\"\\n"\n"Zeile zwei"',
             )
             .replace('msgstr ""\n"Old\\n"\n"value"', 'msgstr "Öffnen"')
         )
